@@ -87,14 +87,27 @@ android {
 }
 
 dependencies {
-
     implementation("com.google.android.material:material:1.12.0")
-
+    
     implementation(platform("androidx.compose:compose-bom:2024.02.00"))
     implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended") // Tambahkan ini
     implementation("androidx.activity:activity-compose:1.8.2")
-
+    
+    // Tambahkan dependencies ini
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
+    implementation("androidx.compose.runtime:runtime-livedata")
+    
+    implementation("androidx.core:core-ktx:1.12.0")
+    
+    debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+    
+    androidTestImplementation(platform("androidx.compose:compose-bom:2024.02.00"))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
 }
 
 

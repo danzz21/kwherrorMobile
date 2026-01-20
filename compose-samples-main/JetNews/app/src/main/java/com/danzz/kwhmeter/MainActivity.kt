@@ -5,42 +5,34 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.text.DecimalFormat
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme(
-                colorScheme = lightColorScheme(
-                    primary = Color(0xFF0D6EFD),
-                    secondary = Color(0xFF6C757D),
-                    tertiary = Color(0xFF198754),
-                    error = Color(0xFFDC3545),
-                    background = Color(0xFFF8F9FA)
-                )
-            ) {
-                KwhMeterApp()
-            }
+            KwhMeterApp()
         }
     }
 }
@@ -49,7 +41,7 @@ class MainActivity : ComponentActivity() {
 fun KwhMeterApp() {
     Surface(
         modifier = Modifier.fillMaxSize(),
-        color = Color(0xFF1E3C72)
+        color = Color(0xFFF5F5F5)
     ) {
         MainScreen()
     }
@@ -57,47 +49,111 @@ fun KwhMeterApp() {
 
 @Composable
 fun MainScreen() {
-    var mode by remember { mutableStateOf(1) }
+    var mode by remember { mutableStateOf(1) } // 1 = 1 Phase, 2 = 3 Phase
     var blinkCount by remember { mutableStateOf(0) }
+    var elapsedTime by remember { mutableLongStateOf(0L) }
     var isCounting by remember { mutableStateOf(false) }
-    var elapsedTime by remember { mutableStateOf(0L) }
     var startTime by remember { mutableLongStateOf(0L) }
-    var powerValue by remember { mutableStateOf("1000") }
-    var ctRatio by remember { mutableStateOf("1") }
-    var vtRatio by remember { mutableStateOf("1") }
-    var calculationEnabled by remember { mutableStateOf(true) }
     
-    // Phase inputs for Mode 2
-    var phaseR by remember { mutableStateOf("") }
-    var phaseS by remember { mutableStateOf("") }
-    var phaseT by remember { mutableStateOf("") }
-    var voltageR by remember { mutableStateOf("220") }
-    var voltageS by remember { mutableStateOf("220") }
-    var voltageT by remember { mutableStateOf("220") }
-    var currentR by remember { mutableStateOf("5") }
-    var currentS by remember { mutableStateOf("5") }
-    var currentT by remember { mutableStateOf("5") }
-    var powerFactorR by remember { mutableStateOf("0.85") }
-    var powerFactorS by remember { mutableStateOf("0.85") }
-    var powerFactorT by remember { mutableStateOf("0.85") }
-
-    // Calculate results
-    val calculatedValues = remember(blinkCount, elapsedTime, powerValue, ctRatio, vtRatio, calculationEnabled) {
-        if (!calculationEnabled || elapsedTime == 0L || blinkCount == 0) {
-            Triple(0.0, 0.0, 0.0)
-        } else {
-            calculateResults(blinkCount, elapsedTime, powerValue, ctRatio, vtRatio)
-        }
-    }
-
-    // Timer for counting
+    // Input data for Mode 1
+    var arus by remember { mutableStateOf("5.0") }
+    var classMeter by remember { mutableStateOf("1.0") }
+    
+    // Input data for Mode 2
+    var p1Input by remember { mutableStateOf("10.0") }
+    var phaseR by remember { mutableStateOf("3.5") }
+    var phaseS by remember { mutableStateOf("3.5") }
+    var phaseT by remember { mutableStateOf("3.0") }
+    
+    // Blink records
+    val blinkRecords = remember { mutableStateListOf<BlinkRecord>() }
+    var selectedBlinkIndex by remember { mutableStateOf<Int?>(null) }
+    
+    // Constants
+    val VOLTAGE = 220.0
+    val COSPHI = 0.85
+    val CONSTANTA = 1600.0
+    
+    // Timer for mode 1
     LaunchedEffect(isCounting) {
         while (isCounting) {
-            delay(1000)
+            delay(10) // Update every 10ms for accuracy
             elapsedTime = System.currentTimeMillis() - startTime
         }
     }
-
+    
+    // Get selected blink record
+    val selectedBlinkRecord = if (selectedBlinkIndex != null && selectedBlinkIndex!! < blinkRecords.size) {
+        blinkRecords[selectedBlinkIndex!!]
+    } else {
+        null
+    }
+    
+    // ========== CALCULATIONS FOR MODE 1 ==========
+    // Calculate P1 based on selected blink
+    val p1Mode1 = if (selectedBlinkRecord != null) {
+        val blinkTime = selectedBlinkRecord.timeSeconds
+        val selectedBlink = selectedBlinkRecord.blinkNumber
+        
+        if (blinkTime > 0) {
+            val blinkPerSecond = selectedBlink.toDouble() / blinkTime
+            (3600 * blinkPerSecond) / CONSTANTA
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    }
+    
+    // Calculate P2 for mode 1: (220 × Arus × 0.85) ÷ 1000
+    val p2Mode1 = try {
+        if (arus.isNotEmpty()) {
+            (VOLTAGE * arus.toDouble() * COSPHI) / 1000
+        } else {
+            0.0
+        }
+    } catch (e: Exception) {
+        0.0
+    }
+    
+    // ========== CALCULATIONS FOR MODE 2 ==========
+    // P1 is direct input in mode 2
+    val p1Mode2 = try {
+        p1Input.toDouble()
+    } catch (e: Exception) {
+        0.0
+    }
+    
+    // P2 for mode 2: Pr + Ps + Pt
+    val p2Mode2 = try {
+        phaseR.toDouble() + phaseS.toDouble() + phaseT.toDouble()
+    } catch (e: Exception) {
+        0.0
+    }
+    
+    // ========== FINAL VALUES ==========
+    val p1 = if (mode == 1) p1Mode1 else p1Mode2
+    val p2 = if (mode == 1) p2Mode1 else p2Mode2
+    
+    // Calculate error percentage: ((P1 - P2) ÷ P2) × 100%
+    val error = if (p2 != 0.0) {
+        ((p1 - p2) / p2) * 100
+    } else {
+        0.0
+    }
+    
+    // Determine status based on class meter
+    val classMeterValue = try { classMeter.toDouble() } catch (e: Exception) { 1.0 }
+    val status = if (Math.abs(error) <= classMeterValue) "DI DALAM KELAS METER" else "DI LUAR KELAS METER"
+    
+    // Check if calculations are valid
+    val isCalculationValid = when {
+        mode == 1 -> selectedBlinkRecord != null && arus.isNotEmpty() && arus.toDoubleOrNull() != null
+        mode == 2 -> p1Input.isNotEmpty() && p1Input.toDoubleOrNull() != null && 
+                     phaseR.isNotEmpty() && phaseS.isNotEmpty() && phaseT.isNotEmpty()
+        else -> false
+    }
+    
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -105,13 +161,12 @@ fun MainScreen() {
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-
         /* ================= HEADER ================= */
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .shadow(8.dp, RoundedCornerShape(12.dp)),
-            colors = CardDefaults.cardColors(Color(0xFF0D6EFD)),
+                .shadow(4.dp, RoundedCornerShape(12.dp)),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF0D6EFD)),
             shape = RoundedCornerShape(12.dp)
         ) {
             Row(
@@ -121,61 +176,25 @@ fun MainScreen() {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .background(Color.White)
-                            .border(2.dp, Color.Yellow, CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("⚡", fontSize = 24.sp)
-                    }
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
-                        Text(
-                            "Error kWh Meter Test",
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp
-                        )
-                        Text(
-                            "Electrical Measurement Tool",
-                            color = Color.White.copy(alpha = 0.8f),
-                            fontSize = 12.sp
-                        )
-                    }
+                Column {
+                    Text(
+                        "KWH Meter Test",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 20.sp
+                    )
+                    Text(
+                        "Error Calculation Tool",
+                        color = Color.White.copy(alpha = 0.8f),
+                        fontSize = 12.sp
+                    )
                 }
-
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    IconButton(
-                        onClick = { 
-                            blinkCount = 0
-                            elapsedTime = 0L
-                            isCounting = false
-                        },
-                        colors = IconButtonDefaults.iconButtonColors(
-                            containerColor = Color.White.copy(alpha = 0.2f)
-                        )
-                    ) {
-                        Icon(
-                            Icons.Default.Refresh,
-                            contentDescription = "Reset",
-                            tint = Color.White
-                        )
-                    }
-                    OutlinedButton(
-                        onClick = {},
-                        border = BorderStroke(1.dp, Color.White),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = Color.White
-                        ),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text("Dashboard")
-                    }
-                }
+                
+                Text(
+                    "Mode: ${if (mode == 1) "1 Phase" else "3 Phase"}",
+                    color = Color.White,
+                    fontSize = 14.sp
+                )
             }
         }
 
@@ -184,50 +203,48 @@ fun MainScreen() {
         /* ================= MODE SELECTION ================= */
         Card(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(Color.White),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
             shape = RoundedCornerShape(12.dp)
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    "Measurement Mode",
+                    "Pilih Mode Pengukuran",
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp,
                     color = Color(0xFF333333)
                 )
                 Spacer(Modifier.height(12.dp))
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Button(
-                        onClick = { mode = 1 },
+                    FilterChip(
+                        selected = mode == 1,
+                        onClick = { 
+                            mode = 1
+                            // Reset when switching to mode 1
+                            isCounting = false
+                            blinkCount = 0
+                            elapsedTime = 0
+                            blinkRecords.clear()
+                            selectedBlinkIndex = null
+                        },
+                        label = { Text("1 Phase (Kedipan)") },
                         modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (mode == 1) Color(0xFF0D6EFD) else Color(0xFFE9ECEF),
-                            contentColor = if (mode == 1) Color.White else Color(0xFF6C757D)
-                        ),
-                        shape = RoundedCornerShape(8.dp),
-                        elevation = ButtonDefaults.buttonElevation(
-                            defaultElevation = if (mode == 1) 4.dp else 0.dp
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFF0D6EFD),
+                            selectedLabelColor = Color.White
                         )
-                    ) {
-                        Text("Blink Mode")
-                    }
-
-                    Button(
+                    )
+                    FilterChip(
+                        selected = mode == 2,
                         onClick = { mode = 2 },
+                        label = { Text("3 Phase") },
                         modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (mode == 2) Color(0xFF0D6EFD) else Color(0xFFE9ECEF),
-                            contentColor = if (mode == 2) Color.White else Color(0xFF6C757D)
-                        ),
-                        shape = RoundedCornerShape(8.dp),
-                        elevation = ButtonDefaults.buttonElevation(
-                            defaultElevation = if (mode == 2) 4.dp else 0.dp
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFF0D6EFD),
+                            selectedLabelColor = Color.White
                         )
-                    ) {
-                        Text("3-Phase Mode")
-                    }
+                    )
                 }
             }
         }
@@ -235,87 +252,145 @@ fun MainScreen() {
         Spacer(Modifier.height(16.dp))
 
         if (mode == 1) {
-            Mode1(
+            Mode1Screen(
                 blinkCount = blinkCount,
                 elapsedTime = elapsedTime,
                 isCounting = isCounting,
-                powerValue = powerValue,
-                ctRatio = ctRatio,
-                vtRatio = vtRatio,
-                calculationEnabled = calculationEnabled,
-                onBlink = { 
+                arus = arus,
+                classMeter = classMeter,
+                blinkRecords = blinkRecords,
+                selectedBlinkIndex = selectedBlinkIndex,
+                p1 = p1,
+                p2 = p2,
+                error = error,
+                status = status,
+                classMeterValue = classMeterValue,
+                isCalculationValid = isCalculationValid,
+                onArusChange = { arus = it },
+                onClassMeterChange = { classMeter = it },
+                onTimerToggle = { 
+                    if (!isCounting) {
+                        startTime = System.currentTimeMillis() - elapsedTime
+                        isCounting = true
+                    } else {
+                        isCounting = false
+                    }
+                },
+                onBlinkClick = {
                     if (!isCounting) {
                         isCounting = true
                         startTime = System.currentTimeMillis()
+                        blinkRecords.clear()
+                        blinkCount = 0
+                        selectedBlinkIndex = null
                     }
+                    
                     blinkCount++
+                    val currentTime = elapsedTime / 1000.0
+                    blinkRecords.add(BlinkRecord(blinkCount, currentTime))
+                    
+                    // Auto-select the latest blink if none selected
+                    if (selectedBlinkIndex == null) {
+                        selectedBlinkIndex = blinkCount - 1
+                    }
                 },
-                onPowerValueChange = { powerValue = it },
-                onCtRatioChange = { ctRatio = it },
-                onVtRatioChange = { vtRatio = it },
-                onCalculationToggle = { calculationEnabled = it },
                 onReset = {
                     blinkCount = 0
-                    elapsedTime = 0L
+                    elapsedTime = 0
                     isCounting = false
+                    blinkRecords.clear()
+                    selectedBlinkIndex = null
                 },
-                onTimerToggle = {
-                    isCounting = it
-                    if (it && startTime == 0L) {
-                        startTime = System.currentTimeMillis()
-                    }
+                onSelectBlink = { index ->
+                    selectedBlinkIndex = index
                 }
             )
         } else {
-            Mode2(
+            Mode2Screen(
+                p1Input = p1Input,
                 phaseR = phaseR,
                 phaseS = phaseS,
                 phaseT = phaseT,
-                voltageR = voltageR,
-                voltageS = voltageS,
-                voltageT = voltageT,
-                currentR = currentR,
-                currentS = currentS,
-                currentT = currentT,
-                powerFactorR = powerFactorR,
-                powerFactorS = powerFactorS,
-                powerFactorT = powerFactorT,
+                classMeter = classMeter,
+                p1 = p1,
+                p2 = p2,
+                error = error,
+                status = status,
+                classMeterValue = classMeterValue,
+                isCalculationValid = isCalculationValid,
+                onP1InputChange = { p1Input = it },
                 onPhaseRChange = { phaseR = it },
                 onPhaseSChange = { phaseS = it },
                 onPhaseTChange = { phaseT = it },
-                onVoltageRChange = { voltageR = it },
-                onVoltageSChange = { voltageS = it },
-                onVoltageTChange = { voltageT = it },
-                onCurrentRChange = { currentR = it },
-                onCurrentSChange = { currentS = it },
-                onCurrentTChange = { currentT = it },
-                onPowerFactorRChange = { powerFactorR = it },
-                onPowerFactorSChange = { powerFactorS = it },
-                onPowerFactorTChange = { powerFactorT = it }
+                onClassMeterChange = { classMeter = it }
             )
         }
 
-        Spacer(Modifier.height(20.dp))
-        
-        // Info Footer
+        /* ================= INFO SECTION ================= */
         Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(Color(0xFFF8F9FA)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 16.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F9FA)),
             shape = RoundedCornerShape(12.dp)
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
+            Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    "kWh Meter v1.0",
+                    "Rumus Perhitungan",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    color = Color(0xFF333333)
+                )
+                Spacer(Modifier.height(8.dp))
+                
+                if (mode == 1) {
+                    Text(
+                        "• P1 = (3600 × n/T) ÷ 1600",
+                        fontSize = 12.sp,
+                        color = Color(0xFF6C757D)
+                    )
+                    Text(
+                        "   n = jumlah kedipan yang dipilih",
+                        fontSize = 11.sp,
+                        color = Color(0xFF6C757D),
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
+                    Text(
+                        "   T = waktu kedipan ke-n (detik)",
+                        fontSize = 11.sp,
+                        color = Color(0xFF6C757D),
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
+                    Text(
+                        "• P2 = (220 × Arus × 0.85) ÷ 1000",
+                        fontSize = 12.sp,
+                        color = Color(0xFF6C757D)
+                    )
+                } else {
+                    Text(
+                        "• P1 = Input langsung (kW)",
+                        fontSize = 12.sp,
+                        color = Color(0xFF6C757D)
+                    )
+                    Text(
+                        "• P2 = Phase R + Phase S + Phase T",
+                        fontSize = 12.sp,
+                        color = Color(0xFF6C757D)
+                    )
+                }
+                
+                Text(
+                    "• Error = ((P1 - P2) ÷ P2) × 100%",
                     fontSize = 12.sp,
                     color = Color(0xFF6C757D)
                 )
                 Text(
-                    "Accuracy: ±0.5%",
+                    "• Status: |Error| ≤ Kelas Meter → DALAM KELAS",
+                    fontSize = 12.sp,
+                    color = Color(0xFF6C757D)
+                )
+                Text(
+                    "• Kelas Meter: 1.0%, 0.5%, atau 0.2%",
                     fontSize = 12.sp,
                     color = Color(0xFF6C757D)
                 )
@@ -324,111 +399,207 @@ fun MainScreen() {
     }
 }
 
-/* ================= MODE 1 ================= */
 @Composable
-fun Mode1(
+fun Mode1Screen(
     blinkCount: Int,
     elapsedTime: Long,
     isCounting: Boolean,
-    powerValue: String,
-    ctRatio: String,
-    vtRatio: String,
-    calculationEnabled: Boolean,
-    onBlink: () -> Unit,
-    onPowerValueChange: (String) -> Unit,
-    onCtRatioChange: (String) -> Unit,
-    onVtRatioChange: (String) -> Unit,
-    onCalculationToggle: (Boolean) -> Unit,
+    arus: String,
+    classMeter: String,
+    blinkRecords: List<BlinkRecord>,
+    selectedBlinkIndex: Int?,
+    p1: Double,
+    p2: Double,
+    error: Double,
+    status: String,
+    classMeterValue: Double,
+    isCalculationValid: Boolean,
+    onArusChange: (String) -> Unit,
+    onClassMeterChange: (String) -> Unit,
+    onTimerToggle: () -> Unit,
+    onBlinkClick: () -> Unit,
     onReset: () -> Unit,
-    onTimerToggle: (Boolean) -> Unit
+    onSelectBlink: (Int) -> Unit
 ) {
-    val seconds = elapsedTime / 1000
-    val minutes = seconds / 60
-    val remainingSeconds = seconds % 60
-    val timeFormatted = String.format("%02d:%02d", minutes, remainingSeconds)
-    
-    val (p1, p2, error) = calculateResults(blinkCount, elapsedTime, powerValue, ctRatio, vtRatio)
-    val formatter = DecimalFormat("#,##0.000")
-
     Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Timer and Counter Card
+        /* ===== INPUT CONFIGURATION ===== */
         Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .shadow(4.dp, RoundedCornerShape(12.dp)),
-            colors = CardDefaults.cardColors(Color.White),
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    "Konfigurasi Pengukuran 1 Phase",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = Color(0xFF333333)
+                )
+                
+                Spacer(Modifier.height(12.dp))
+                
+                // Input for P2 calculation
+                Text(
+                    "Input untuk menghitung P2:",
+                    fontSize = 14.sp,
+                    color = Color(0xFF6C757D)
+                )
+                Spacer(Modifier.height(8.dp))
+                
+                OutlinedTextField(
+                    value = arus,
+                    onValueChange = onArusChange,
+                    label = { Text("Arus (Ampere)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    isError = arus.isNotEmpty() && arus.toDoubleOrNull() == null,
+                    supportingText = {
+                        if (arus.isNotEmpty() && arus.toDoubleOrNull() == null) {
+                            Text("Masukkan angka yang valid")
+                        } else {
+                            Text("Contoh: 5.0, 10.5, 15.0")
+                        }
+                    }
+                )
+                
+                Spacer(Modifier.height(12.dp))
+                
+                // Class meter input
+                OutlinedTextField(
+                    value = classMeter,
+                    onValueChange = onClassMeterChange,
+                    label = { Text("Kelas Meter (%)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    isError = classMeter.isNotEmpty() && !isValidClassMeter(classMeter),
+                    supportingText = {
+                        if (classMeter.isNotEmpty() && !isValidClassMeter(classMeter)) {
+                            Text("Harus 1.0, 0.5, atau 0.2")
+                        } else {
+                            Text("Pilih: 1.0, 0.5, atau 0.2")
+                        }
+                    }
+                )
+                
+                Spacer(Modifier.height(12.dp))
+                
+                // Selected blink info
+                val selectedRecord = if (selectedBlinkIndex != null && selectedBlinkIndex < blinkRecords.size) {
+                    blinkRecords[selectedBlinkIndex]
+                } else null
+                
+                if (selectedRecord != null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFFE7F1FF))
+                            .padding(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    "Kedipan yang dipilih untuk P1:",
+                                    fontSize = 12.sp,
+                                    color = Color(0xFF0D6EFD)
+                                )
+                                Text(
+                                    "Kedipan ke-${selectedRecord.blinkNumber} pada detik ${String.format("%.2f", selectedRecord.timeSeconds)}",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF0D6EFD)
+                                )
+                            }
+                            
+                            Text(
+                                "n/T = ${selectedRecord.blinkNumber}/${String.format("%.2f", selectedRecord.timeSeconds)}",
+                                fontSize = 12.sp,
+                                color = Color(0xFF6C757D)
+                            )
+                        }
+                    }
+                    
+                    Spacer(Modifier.height(8.dp))
+                    
+                    // Calculate blink per second
+                    val blinkPerSecond = selectedRecord.blinkNumber.toDouble() / selectedRecord.timeSeconds
+                    Text(
+                        "Kedipan/detik = ${String.format("%.3f", blinkPerSecond)}",
+                        fontSize = 12.sp,
+                        color = Color(0xFF6C757D),
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
+            }
+        }
+
+        /* ===== TIMER AND COUNTER ===== */
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
             shape = RoundedCornerShape(12.dp)
         ) {
             Column(
                 modifier = Modifier.padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(
-                    "Blink Measurement",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp,
-                    color = Color(0xFF333333)
-                )
-                
-                Spacer(Modifier.height(16.dp))
-                
-                // Timer Display
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
+                    Column {
                         Text(
-                            "Time",
+                            "Waktu",
                             fontSize = 12.sp,
                             color = Color(0xFF6C757D)
                         )
+                        val seconds = elapsedTime / 1000.0
                         Text(
-                            timeFormatted,
+                            String.format("%.2f", seconds) + " detik",
                             fontSize = 28.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF0D6EFD)
                         )
                     }
                     
-                    // Start/Stop Timer Button
                     Button(
-                        onClick = { onTimerToggle(!isCounting) },
+                        onClick = onTimerToggle,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (isCounting) Color(0xFFDC3545) else Color(0xFF198754)
                         ),
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Text(if (isCounting) "Stop Timer" else "Start Timer")
+                        Text(if (isCounting) "STOP" else "START")
                     }
                 }
                 
                 Spacer(Modifier.height(20.dp))
                 
-                // Blink Counter
+                // Blink Counter Button
                 Button(
-                    onClick = onBlink,
-                    modifier = Modifier.size(160.dp),
+                    onClick = onBlinkClick,
+                    modifier = Modifier.size(140.dp),
                     shape = CircleShape,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Color(0xFF0D6EFD)
                     ),
-                    elevation = ButtonDefaults.buttonElevation(
-                        defaultElevation = 8.dp,
-                        pressedElevation = 4.dp
-                    )
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 8.dp),
+                    enabled = isCounting || blinkCount == 0
                 ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            "TAP",
+                            "KEDIPAN",
                             fontSize = 14.sp,
                             color = Color.White.copy(alpha = 0.8f)
                         )
@@ -439,307 +610,104 @@ fun Mode1(
                             color = Color.White
                         )
                         Text(
-                            "Blink Count",
-                            fontSize = 12.sp,
+                            if (isCounting) "TAP saat kedipan" else "START dulu",
+                            fontSize = 10.sp,
                             color = Color.White.copy(alpha = 0.8f)
                         )
                     }
                 }
                 
-                Spacer(Modifier.height(20.dp))
-                
-                // Reset Button
-                OutlinedButton(
-                    onClick = onReset,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = Color(0xFF6C757D)
-                    ),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Refresh,
-                        contentDescription = "Reset",
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text("Reset Counter")
-                }
-            }
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        // Configuration Card
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .shadow(4.dp, RoundedCornerShape(12.dp)),
-            colors = CardDefaults.cardColors(Color.White),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "Configuration",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp,
-                        color = Color(0xFF333333)
-                    )
-                    
-                    Switch(
-                        checked = calculationEnabled,
-                        onCheckedChange = onCalculationToggle,
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color(0xFF0D6EFD),
-                            checkedTrackColor = Color(0xFF0D6EFD).copy(alpha = 0.5f)
-                        )
-                    )
-                }
-                
-                Spacer(Modifier.height(12.dp))
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    ConfigurationInput(
-                        title = "Power (W)",
-                        value = powerValue,
-                        onValueChange = onPowerValueChange,
-                        unit = "W",
-                        modifier = Modifier.weight(1f)
-                    )
-                    ConfigurationInput(
-                        title = "CT Ratio",
-                        value = ctRatio,
-                        onValueChange = onCtRatioChange,
-                        unit = ":1",
-                        modifier = Modifier.weight(1f)
-                    )
-                    ConfigurationInput(
-                        title = "VT Ratio",
-                        value = vtRatio,
-                        onValueChange = onVtRatioChange,
-                        unit = ":1",
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        // Results Card
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .shadow(4.dp, RoundedCornerShape(12.dp)),
-            colors = CardDefaults.cardColors(Color.White),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    "Measurement Results",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
-                    color = Color(0xFF333333)
-                )
-                
                 Spacer(Modifier.height(16.dp))
                 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
-                    ResultCard(
-                        title = "Meter 1 (P1)",
-                        value = if (calculationEnabled) formatter.format(p1) else "0.000",
-                        unit = "kW",
-                        color = Color(0xFF0D6EFD),
-                        modifier = Modifier.weight(1f)
-                    )
-                    ResultCard(
-                        title = "Meter 2 (P2)",
-                        value = if (calculationEnabled) formatter.format(p2) else "0.000",
-                        unit = "kW",
-                        color = Color(0xFF198754),
-                        modifier = Modifier.weight(1f)
-                    )
-                    ResultCard(
-                        title = "Error",
-                        value = if (calculationEnabled) String.format("%.2f", error) else "0.00",
-                        unit = "%",
-                        color = if (error <= 2) Color(0xFF198754) else Color(0xFFDC3545),
-                        modifier = Modifier.weight(1f)
-                    )
+                    OutlinedButton(
+                        onClick = onReset,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Reset")
+                        Spacer(Modifier.width(8.dp))
+                        Text("Reset")
+                    }
                 }
                 
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(8.dp))
                 
-                // Error Status
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp)
-                        .background(
-                            color = when {
-                                error == 0.0 -> Color(0xFFE9ECEF)
-                                error <= 2 -> Color(0xFFD1E7DD)
-                                else -> Color(0xFFF8D7DA)
-                            },
-                            shape = RoundedCornerShape(8.dp)
-                        )
-                        .padding(12.dp)
-                ) {
+                // Info text
+                if (!isCounting && blinkCount == 0) {
                     Text(
-                        text = when {
-                            error == 0.0 -> "Start measurement to see results"
-                            error <= 2 -> "✅ Error within acceptable limits (±2%)"
-                            else -> "⚠️ Error exceeds acceptable limits"
-                        },
-                        color = when {
-                            error == 0.0 -> Color(0xFF6C757D)
-                            error <= 2 -> Color(0xFF0F5132)
-                            else -> Color(0xFF842029)
-                        },
-                        fontSize = 14.sp,
+                        "Tekan START lalu TAP tombol setiap kali meter berkedip",
+                        fontSize = 12.sp,
+                        color = Color(0xFFDC3545),
                         modifier = Modifier.fillMaxWidth(),
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
                 }
             }
         }
-    }
-}
 
-/* ================= MODE 2 ================= */
-@Composable
-fun Mode2(
-    phaseR: String,
-    phaseS: String,
-    phaseT: String,
-    voltageR: String,
-    voltageS: String,
-    voltageT: String,
-    currentR: String,
-    currentS: String,
-    currentT: String,
-    powerFactorR: String,
-    powerFactorS: String,
-    powerFactorT: String,
-    onPhaseRChange: (String) -> Unit,
-    onPhaseSChange: (String) -> Unit,
-    onPhaseTChange: (String) -> Unit,
-    onVoltageRChange: (String) -> Unit,
-    onVoltageSChange: (String) -> Unit,
-    onVoltageTChange: (String) -> Unit,
-    onCurrentRChange: (String) -> Unit,
-    onCurrentSChange: (String) -> Unit,
-    onCurrentTChange: (String) -> Unit,
-    onPowerFactorRChange: (String) -> Unit,
-    onPowerFactorSChange: (String) -> Unit,
-    onPowerFactorTChange: (String) -> Unit
-) {
-    // Calculate total power
-    val powerR = try { voltageR.toDouble() * currentR.toDouble() * powerFactorR.toDouble() } catch (_: Exception) { 0.0 }
-    val powerS = try { voltageS.toDouble() * currentS.toDouble() * powerFactorS.toDouble() } catch (_: Exception) { 0.0 }
-    val powerT = try { voltageT.toDouble() * currentT.toDouble() * powerFactorT.toDouble() } catch (_: Exception) { 0.0 }
-    val totalPower = powerR + powerS + powerT
-    val formatter = DecimalFormat("#,##0.00")
-    
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        // 3-Phase Input Card
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .shadow(4.dp, RoundedCornerShape(12.dp)),
-            colors = CardDefaults.cardColors(Color.White),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+        /* ===== BLINK RECORDS ===== */
+        if (blinkRecords.isNotEmpty()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "Rekaman Kedipan",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            color = Color(0xFF333333)
+                        )
+                        Text(
+                            "Total: ${blinkRecords.size} kedipan",
+                            fontSize = 12.sp,
+                            color = Color(0xFF6C757D)
+                        )
+                    }
+                    
+                    Spacer(Modifier.height(12.dp))
+                    
+                    // Blink records list
+                    LazyColumn(
+                        modifier = Modifier.height(150.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        items(blinkRecords) { record ->
+                            BlinkRecordItem(
+                                record = record,
+                                isSelected = selectedBlinkIndex == blinkRecords.indexOf(record),
+                                onClick = { onSelectBlink(blinkRecords.indexOf(record)) }
+                            )
+                        }
+                    }
+                    
+                    Spacer(Modifier.height(8.dp))
+                    
                     Text(
-                        "3-Phase Measurement",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp,
-                        color = Color(0xFF333333)
-                    )
-                    Icon(
-                        Icons.Default.Settings,
-                        contentDescription = "Settings",
-                        tint = Color(0xFF6C757D)
-                    )
-                }
-                
-                Spacer(Modifier.height(16.dp))
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    PhaseCard(
-                        title = "Phase R",
-                        color = Color(0xFFDC3545),
-                        voltage = voltageR,
-                        current = currentR,
-                        powerFactor = powerFactorR,
-                        power = powerR,
-                        onVoltageChange = onVoltageRChange,
-                        onCurrentChange = onCurrentRChange,
-                        onPowerFactorChange = onPowerFactorRChange,
-                        modifier = Modifier.weight(1f)
-                    )
-                    PhaseCard(
-                        title = "Phase S",
-                        color = Color(0xFF198754),
-                        voltage = voltageS,
-                        current = currentS,
-                        powerFactor = powerFactorS,
-                        power = powerS,
-                        onVoltageChange = onVoltageSChange,
-                        onCurrentChange = onCurrentSChange,
-                        onPowerFactorChange = onPowerFactorSChange,
-                        modifier = Modifier.weight(1f)
-                    )
-                    PhaseCard(
-                        title = "Phase T",
-                        color = Color(0xFF0D6EFD),
-                        voltage = voltageT,
-                        current = currentT,
-                        powerFactor = powerFactorT,
-                        power = powerT,
-                        onVoltageChange = onVoltageTChange,
-                        onCurrentChange = onCurrentTChange,
-                        onPowerFactorChange = onPowerFactorTChange,
-                        modifier = Modifier.weight(1f)
+                        "Pilih kedipan untuk menghitung P1",
+                        fontSize = 12.sp,
+                        color = Color(0xFF6C757D),
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
                 }
             }
         }
 
-        Spacer(Modifier.height(16.dp))
-
-        // Total Power Card
+        /* ===== CALCULATION RESULTS ===== */
         Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .shadow(4.dp, RoundedCornerShape(12.dp)),
-            colors = CardDefaults.cardColors(Color.White),
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
             shape = RoundedCornerShape(12.dp)
         ) {
             Column(
@@ -747,7 +715,7 @@ fun Mode2(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    "Total Power Calculation",
+                    "Hasil Perhitungan",
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp,
                     color = Color(0xFF333333)
@@ -755,150 +723,418 @@ fun Mode2(
                 
                 Spacer(Modifier.height(16.dp))
                 
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(100.dp)
-                        .background(
-                            brush = Brush.linearGradient(
-                                colors = listOf(
-                                    Color(0xFFDC3545).copy(alpha = 0.1f),
-                                    Color(0xFF198754).copy(alpha = 0.1f),
-                                    Color(0xFF0D6EFD).copy(alpha = 0.1f)
-                                )
-                            ),
-                            shape = RoundedCornerShape(12.dp)
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                if (!isCalculationValid) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFFFFF3CD))
+                            .padding(16.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
                         Text(
-                            formatter.format(totalPower),
-                            fontSize = 36.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF333333)
-                        )
-                        Text(
-                            "Watts",
+                            "Lengkapi semua input untuk melihat hasil",
                             fontSize = 14.sp,
-                            color = Color(0xFF6C757D)
+                            color = Color(0xFF856404),
+                            fontWeight = FontWeight.Medium
                         )
                     }
-                }
-                
-                Spacer(Modifier.height(12.dp))
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    InfoItem(
-                        title = "Phase R",
-                        value = formatter.format(powerR),
-                        unit = "W",
-                        color = Color(0xFFDC3545),
-                        modifier = Modifier.weight(1f)
-                    )
-                    InfoItem(
-                        title = "Phase S",
-                        value = formatter.format(powerS),
-                        unit = "W",
-                        color = Color(0xFF198754),
-                        modifier = Modifier.weight(1f)
-                    )
-                    InfoItem(
-                        title = "Phase T",
-                        value = formatter.format(powerT),
-                        unit = "W",
-                        color = Color(0xFF0D6EFD),
-                        modifier = Modifier.weight(1f)
-                    )
+                } else {
+                    // P1 and P2 Display
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        ResultBox(
+                            title = "P1 (kW)",
+                            value = String.format("%.3f", p1),
+                            unit = "Dari kedipan meter",
+                            color = Color(0xFF0D6EFD),
+                            modifier = Modifier.weight(1f)
+                        )
+                        
+                        ResultBox(
+                            title = "P2 (kW)",
+                            value = String.format("%.3f", p2),
+                            unit = "Dari arus ${arus}A",
+                            color = Color(0xFF198754),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    
+                    Spacer(Modifier.height(16.dp))
+                    
+                    // Error and Status Display
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        ResultBox(
+                            title = "ERROR",
+                            value = String.format("%.2f", error),
+                            unit = "%",
+                            color = if (Math.abs(error) <= classMeterValue) Color(0xFF198754) else Color(0xFFDC3545),
+                            modifier = Modifier.weight(1f)
+                        )
+                        
+                        ResultBox(
+                            title = "KELAS",
+                            value = String.format("%.1f", classMeterValue),
+                            unit = "%",
+                            color = Color(0xFF6C757D),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    
+                    Spacer(Modifier.height(16.dp))
+                    
+                    // Status
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(
+                                color = if (status == "DI DALAM KELAS METER") 
+                                    Color(0xFFD1E7DD) 
+                                else 
+                                    Color(0xFFF8D7DA)
+                            )
+                            .padding(16.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                status,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = if (status == "DI DALAM KELAS METER") 
+                                    Color(0xFF0F5132) 
+                                else 
+                                    Color(0xFF842029)
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                if (status == "DI DALAM KELAS METER")
+                                    "✅ Meter dalam toleransi"
+                                else
+                                    "⚠️ Meter di luar toleransi",
+                                fontSize = 12.sp,
+                                color = if (status == "DI DALAM KELAS METER") 
+                                    Color(0xFF0F5132) 
+                                else 
+                                    Color(0xFF842029)
+                            )
+                        }
+                    }
                 }
             }
         }
     }
 }
 
-/* ================= HELPER FUNCTIONS ================= */
-fun calculateResults(
-    blinkCount: Int,
-    elapsedTime: Long,
-    powerValue: String,
-    ctRatio: String,
-    vtRatio: String
-): Triple<Double, Double, Double> {
-    return try {
-        val timeInSeconds = elapsedTime / 1000.0
-        if (blinkCount == 0 || timeInSeconds == 0.0) {
-            return Triple(0.0, 0.0, 0.0)
+@Composable
+fun Mode2Screen(
+    p1Input: String,
+    phaseR: String,
+    phaseS: String,
+    phaseT: String,
+    classMeter: String,
+    p1: Double,
+    p2: Double,
+    error: Double,
+    status: String,
+    classMeterValue: Double,
+    isCalculationValid: Boolean,
+    onP1InputChange: (String) -> Unit,
+    onPhaseRChange: (String) -> Unit,
+    onPhaseSChange: (String) -> Unit,
+    onPhaseTChange: (String) -> Unit,
+    onClassMeterChange: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        /* ===== INPUT CONFIGURATION ===== */
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    "Input Data 3 Phase",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = Color(0xFF333333)
+                )
+                
+                Spacer(Modifier.height(12.dp))
+                
+                // Class meter input
+                OutlinedTextField(
+                    value = classMeter,
+                    onValueChange = onClassMeterChange,
+                    label = { Text("Kelas Meter (%)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    isError = classMeter.isNotEmpty() && !isValidClassMeter(classMeter),
+                    supportingText = {
+                        if (classMeter.isNotEmpty() && !isValidClassMeter(classMeter)) {
+                            Text("Harus 1.0, 0.5, atau 0.2")
+                        } else {
+                            Text("Pilih: 1.0, 0.5, atau 0.2")
+                        }
+                    }
+                )
+                
+                Spacer(Modifier.height(12.dp))
+                
+                // P1 input
+                Text(
+                    "Input P1 (Pembacaan Meter):",
+                    fontSize = 14.sp,
+                    color = Color(0xFF6C757D)
+                )
+                Spacer(Modifier.height(8.dp))
+                
+                OutlinedTextField(
+                    value = p1Input,
+                    onValueChange = onP1InputChange,
+                    label = { Text("P1 (kW)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    isError = p1Input.isNotEmpty() && p1Input.toDoubleOrNull() == null,
+                    supportingText = {
+                        if (p1Input.isNotEmpty() && p1Input.toDoubleOrNull() == null) {
+                            Text("Masukkan angka yang valid")
+                        } else {
+                            Text("Nilai pembacaan meter dalam kW")
+                        }
+                    }
+                )
+                
+                Spacer(Modifier.height(16.dp))
+                
+                Text(
+                    "Input P2 (Perhitungan Phase):",
+                    fontSize = 14.sp,
+                    color = Color(0xFF6C757D)
+                )
+                Spacer(Modifier.height(8.dp))
+                
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    PhaseInputField(
+                        value = phaseR,
+                        onValueChange = onPhaseRChange,
+                        label = "Phase R (kW)",
+                        color = Color(0xFFDC3545),
+                        modifier = Modifier.weight(1f)
+                    )
+                    PhaseInputField(
+                        value = phaseS,
+                        onValueChange = onPhaseSChange,
+                        label = "Phase S (kW)",
+                        color = Color(0xFF198754),
+                        modifier = Modifier.weight(1f)
+                    )
+                    PhaseInputField(
+                        value = phaseT,
+                        onValueChange = onPhaseTChange,
+                        label = "Phase T (kW)",
+                        color = Color(0xFF0D6EFD),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                
+                Spacer(Modifier.height(8.dp))
+                
+                // Calculate P2 from inputs
+                val p2Calculated = try {
+                    phaseR.toDouble() + phaseS.toDouble() + phaseT.toDouble()
+                } catch (e: Exception) {
+                    0.0
+                }
+                
+                Text(
+                    "P2 = Phase R + Phase S + Phase T = ${String.format("%.3f", p2Calculated)} kW",
+                    fontSize = 12.sp,
+                    color = Color(0xFF6C757D),
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            }
         }
-        
-        val power = powerValue.toDouble()
-        val ct = ctRatio.toDouble()
-        val vt = vtRatio.toDouble()
-        
-        // Calculate blink frequency (blinks per hour)
-        val blinksPerHour = (blinkCount / timeInSeconds) * 3600
-        
-        // Calculate measured power (assuming 1 blink = 1 Wh)
-        val measuredPower = blinksPerHour * ct * vt / 1000.0 // Convert to kW
-        
-        // Calculate reference power (input power)
-        val referencePower = power / 1000.0 // Convert to kW
-        
-        // Calculate error percentage
-        val error = if (referencePower > 0) {
-            ((measuredPower - referencePower) / referencePower) * 100
-        } else {
-            0.0
+
+        /* ===== CALCULATION RESULTS ===== */
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    "Hasil Perhitungan 3 Phase",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = Color(0xFF333333)
+                )
+                
+                Spacer(Modifier.height(16.dp))
+                
+                if (!isCalculationValid) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFFFFF3CD))
+                            .padding(16.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "Lengkapi semua input untuk melihat hasil",
+                            fontSize = 14.sp,
+                            color = Color(0xFF856404),
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                } else {
+                    // P1 and P2 Display
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        ResultBox(
+                            title = "P1 (kW)",
+                            value = String.format("%.3f", p1),
+                            unit = "Input langsung",
+                            color = Color(0xFF0D6EFD),
+                            modifier = Modifier.weight(1f)
+                        )
+                        
+                        ResultBox(
+                            title = "P2 (kW)",
+                            value = String.format("%.3f", p2),
+                            unit = "Jumlah 3 Phase",
+                            color = Color(0xFF198754),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    
+                    Spacer(Modifier.height(16.dp))
+                    
+                    // Error and Status Display
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        ResultBox(
+                            title = "ERROR",
+                            value = String.format("%.2f", error),
+                            unit = "%",
+                            color = if (Math.abs(error) <= classMeterValue) Color(0xFF198754) else Color(0xFFDC3545),
+                            modifier = Modifier.weight(1f)
+                        )
+                        
+                        ResultBox(
+                            title = "KELAS",
+                            value = String.format("%.1f", classMeterValue),
+                            unit = "%",
+                            color = Color(0xFF6C757D),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    
+                    Spacer(Modifier.height(16.dp))
+                    
+                    // Phase Breakdown
+                    Text(
+                        "Breakdown Per Phase",
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 14.sp,
+                        color = Color(0xFF6C757D)
+                    )
+                    
+                    Spacer(Modifier.height(8.dp))
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        PhaseResultBox(
+                            label = "Phase R",
+                            value = String.format("%.3f", try { phaseR.toDouble() } catch (e: Exception) { 0.0 }),
+                            color = Color(0xFFDC3545),
+                            modifier = Modifier.weight(1f)
+                        )
+                        PhaseResultBox(
+                            label = "Phase S",
+                            value = String.format("%.3f", try { phaseS.toDouble() } catch (e: Exception) { 0.0 }),
+                            color = Color(0xFF198754),
+                            modifier = Modifier.weight(1f)
+                        )
+                        PhaseResultBox(
+                            label = "Phase T",
+                            value = String.format("%.3f", try { phaseT.toDouble() } catch (e: Exception) { 0.0 }),
+                            color = Color(0xFF0D6EFD),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    
+                    Spacer(Modifier.height(16.dp))
+                    
+                    // Status
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(
+                                color = if (status == "DI DALAM KELAS METER") 
+                                    Color(0xFFD1E7DD) 
+                                else 
+                                    Color(0xFFF8D7DA)
+                            )
+                            .padding(16.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                status,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = if (status == "DI DALAM KELAS METER") 
+                                    Color(0xFF0F5132) 
+                                else 
+                                    Color(0xFF842029)
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                if (status == "DI DALAM KELAS METER")
+                                    "✅ Meter dalam toleransi"
+                                else
+                                    "⚠️ Meter di luar toleransi",
+                                fontSize = 12.sp,
+                                color = if (status == "DI DALAM KELAS METER") 
+                                    Color(0xFF0F5132) 
+                                else 
+                                    Color(0xFF842029)
+                            )
+                        }
+                    }
+                }
+            }
         }
-        
-        Triple(referencePower, measuredPower, error)
-    } catch (e: Exception) {
-        Triple(0.0, 0.0, 0.0)
     }
 }
 
 /* ================= COMPONENTS ================= */
 @Composable
-fun ConfigurationInput(
-    title: String,
-    value: String,
-    onValueChange: (String) -> Unit,
-    unit: String,
-    modifier: Modifier = Modifier
-) {
-    Column(modifier = modifier) {
-        Text(
-            title,
-            fontSize = 12.sp,
-            color = Color(0xFF6C757D)
-        )
-        Spacer(Modifier.height(4.dp))
-        OutlinedTextField(
-            value = value,
-            onValueChange = onValueChange,
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Color(0xFF0D6EFD),
-                unfocusedBorderColor = Color(0xFFDEE2E6)
-            ),
-            shape = RoundedCornerShape(8.dp),
-            trailingIcon = {
-                Text(
-                    unit,
-                    fontSize = 12.sp,
-                    color = Color(0xFF6C757D)
-                )
-            }
-        )
-    }
-}
-
-@Composable
-fun ResultCard(
+fun ResultBox(
     title: String,
     value: String,
     unit: String,
@@ -907,9 +1143,7 @@ fun ResultCard(
 ) {
     Card(
         modifier = modifier,
-        colors = CardDefaults.cardColors(
-            containerColor = color.copy(alpha = 0.1f)
-        ),
+        colors = CardDefaults.cardColors(containerColor = color.copy(alpha = 0.1f)),
         shape = RoundedCornerShape(8.dp)
     ) {
         Column(
@@ -933,135 +1167,159 @@ fun ResultCard(
             Text(
                 unit,
                 fontSize = 10.sp,
-                color = Color(0xFF6C757D)
+                color = color.copy(alpha = 0.8f)
             )
         }
     }
 }
 
 @Composable
-fun PhaseCard(
-    title: String,
+fun PhaseInputField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
     color: Color,
-    voltage: String,
-    current: String,
-    powerFactor: String,
-    power: Double,
-    onVoltageChange: (String) -> Unit,
-    onCurrentChange: (String) -> Unit,
-    onPowerFactorChange: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier) {
+        Text(
+            label,
+            fontSize = 12.sp,
+            color = color,
+            fontWeight = FontWeight.Medium
+        )
+        Spacer(Modifier.height(4.dp))
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = color,
+                unfocusedBorderColor = color.copy(alpha = 0.5f)
+            ),
+            shape = RoundedCornerShape(8.dp),
+            isError = value.isNotEmpty() && value.toDoubleOrNull() == null
+        )
+    }
+}
+
+@Composable
+fun PhaseResultBox(
+    label: String,
+    value: String,
+    color: Color,
     modifier: Modifier = Modifier
 ) {
     Card(
         modifier = modifier,
-        colors = CardDefaults.cardColors(Color.White),
-        border = BorderStroke(1.dp, color.copy(alpha = 0.3f)),
+        colors = CardDefaults.cardColors(containerColor = color.copy(alpha = 0.1f)),
         shape = RoundedCornerShape(8.dp)
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    title,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = color
-                )
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(color)
-                )
-            }
-            
-            Spacer(Modifier.height(12.dp))
-            
-            ConfigurationInput(
-                title = "Voltage",
-                value = voltage,
-                onValueChange = onVoltageChange,
-                unit = "V",
-                modifier = Modifier.fillMaxWidth()
+        Column(
+            modifier = Modifier
+                .padding(8.dp)
+                .fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                label,
+                fontSize = 11.sp,
+                color = color,
+                fontWeight = FontWeight.Medium
             )
-            
-            Spacer(Modifier.height(8.dp))
-            
-            ConfigurationInput(
-                title = "Current",
-                value = current,
-                onValueChange = onCurrentChange,
-                unit = "A",
-                modifier = Modifier.fillMaxWidth()
+            Spacer(Modifier.height(2.dp))
+            Text(
+                value,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = color
             )
-            
-            Spacer(Modifier.height(8.dp))
-            
-            ConfigurationInput(
-                title = "Power Factor",
-                value = powerFactor,
-                onValueChange = onPowerFactorChange,
-                unit = "",
-                modifier = Modifier.fillMaxWidth()
+            Text(
+                "kW",
+                fontSize = 10.sp,
+                color = color.copy(alpha = 0.7f)
             )
-            
-            Spacer(Modifier.height(12.dp))
-            
-            Divider(color = Color(0xFFE9ECEF), thickness = 1.dp)
-            
-            Spacer(Modifier.height(8.dp))
-            
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    "Power:",
-                    fontSize = 12.sp,
-                    color = Color(0xFF6C757D)
-                )
-                Text(
-                    "${"%.1f".format(power)} W",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = color
-                )
-            }
         }
     }
 }
 
 @Composable
-fun InfoItem(
-    title: String,
-    value: String,
-    unit: String,
-    color: Color,
-    modifier: Modifier = Modifier
+fun BlinkRecordItem(
+    record: BlinkRecord,
+    isSelected: Boolean,
+    onClick: () -> Unit
 ) {
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) Color(0xFFE7F1FF) else Color.White
+        ),
+        shape = RoundedCornerShape(8.dp),
+        border = if (isSelected) BorderStroke(2.dp, Color(0xFF0D6EFD)) else null
     ) {
-        Text(
-            title,
-            fontSize = 12.sp,
-            color = Color(0xFF6C757D)
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            value,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-            color = color
-        )
-        Text(
-            unit,
-            fontSize = 10.sp,
-            color = Color(0xFF6C757D)
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    "Kedipan ke-${record.blinkNumber}",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Color(0xFF333333)
+                )
+                Text(
+                    "Pada detik ${String.format("%.2f", record.timeSeconds)}",
+                    fontSize = 12.sp,
+                    color = Color(0xFF6C757D)
+                )
+            }
+            
+            Column(horizontalAlignment = Alignment.End) {
+                val blinkPerSecond = record.blinkNumber.toDouble() / record.timeSeconds
+                Text(
+                    "${String.format("%.3f", blinkPerSecond)}/dtk",
+                    fontSize = 11.sp,
+                    color = Color(0xFF6C757D)
+                )
+                if (isSelected) {
+                    Spacer(Modifier.height(4.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(20.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF0D6EFD)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "✓",
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* ================= DATA CLASSES & HELPER FUNCTIONS ================= */
+data class BlinkRecord(
+    val blinkNumber: Int,
+    val timeSeconds: Double
+)
+
+fun isValidClassMeter(value: String): Boolean {
+    return when (value) {
+        "1.0", "0.5", "0.2", "1", "0.5", "0.2" -> true
+        else -> false
     }
 }
