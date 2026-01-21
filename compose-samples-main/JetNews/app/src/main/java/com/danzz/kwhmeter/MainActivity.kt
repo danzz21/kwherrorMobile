@@ -60,7 +60,32 @@ data class CalculationResult(
     val p2: Double,
     val error: Double,
     val status: String,
-    val kelasMeter: Double
+    val kelasMeter: Double,
+    val mode: Int
+)
+
+data class InputData(
+    // Mode 1
+    val arus: String = "",
+    val classMeter: String = "",
+    val selectedBlinkIndex: Int? = null,
+    val blinkCount: Int = 0,
+    val elapsedTime: Long = 0,
+    
+    // Mode 2
+    val p1Input: String = "",
+    val phaseR: String = "",
+    val phaseS: String = "",
+    val phaseT: String = ""
+)
+
+data class RiwayatData(
+    val id: String = UUID.randomUUID().toString(),
+    val timestamp: Long = System.currentTimeMillis(),
+    val pelangganData: PelangganData,
+    val mode: Int, // 1 = 1 Phase, 2 = 3 Phase
+    val inputData: InputData,
+    val calculationResult: CalculationResult
 )
 
 // ================= VIEWMODEL =================
@@ -121,6 +146,14 @@ class KwhViewModel : ViewModel() {
     private val _fotoPath = MutableStateFlow<String?>(null)
     val fotoPath: StateFlow<String?> = _fotoPath.asStateFlow()
     
+    // Riwayat data
+    private val _riwayatList = MutableStateFlow<List<RiwayatData>>(emptyList())
+    val riwayatList: StateFlow<List<RiwayatData>> = _riwayatList.asStateFlow()
+    
+    // Current riwayat ID untuk edit/hapus
+    private val _currentRiwayatId = MutableStateFlow<String?>(null)
+    val currentRiwayatId: StateFlow<String?> = _currentRiwayatId.asStateFlow()
+    
     // Constants
     companion object {
         const val VOLTAGE = 220.0
@@ -147,6 +180,8 @@ class KwhViewModel : ViewModel() {
     fun setNamaPelanggan(value: String) { _namaPelanggan.value = value }
     fun setAlamatPelanggan(value: String) { _alamatPelanggan.value = value }
     fun setFotoPath(value: String?) { _fotoPath.value = value }
+    
+    fun setCurrentRiwayatId(id: String?) { _currentRiwayatId.value = id }
     
     // Timer functions
     fun startTimer() {
@@ -203,7 +238,7 @@ class KwhViewModel : ViewModel() {
         val error = if (p2 != 0.0) ((p1 - p2) / p2) * 100 else 0.0
         val status = if (Math.abs(error) <= kelasMeterValue) "DI DALAM KELAS METER" else "DI LUAR KELAS METER"
         
-        return CalculationResult(p1, p2, error, status, kelasMeterValue)
+        return CalculationResult(p1, p2, error, status, kelasMeterValue, modeValue)
     }
     
     private fun calculateP1(mode: Int): Double {
@@ -243,6 +278,109 @@ class KwhViewModel : ViewModel() {
         }
     }
     
+    // Riwayat functions
+    fun saveRiwayat() {
+        val pelangganData = PelangganData(
+            idPelanggan = _idPelanggan.value,
+            nama = _namaPelanggan.value,
+            alamat = _alamatPelanggan.value,
+            fotoPath = _fotoPath.value ?: "",
+            timestamp = System.currentTimeMillis()
+        )
+        
+        val inputData = InputData(
+            arus = _arus.value,
+            classMeter = _classMeter.value,
+            selectedBlinkIndex = _selectedBlinkIndex.value,
+            blinkCount = _blinkCount.value,
+            elapsedTime = _elapsedTime.value,
+            p1Input = _p1Input.value,
+            phaseR = _phaseR.value,
+            phaseS = _phaseS.value,
+            phaseT = _phaseT.value
+        )
+        
+        val calculationResult = calculateResults()
+        
+        val riwayat = RiwayatData(
+            pelangganData = pelangganData,
+            mode = _mode.value,
+            inputData = inputData,
+            calculationResult = calculationResult
+        )
+        
+        // Jika ada currentRiwayatId, update data yang ada
+        _currentRiwayatId.value?.let { currentId ->
+            _riwayatList.value = _riwayatList.value.map { 
+                if (it.id == currentId) riwayat.copy(id = currentId) else it 
+            }
+        } ?: run {
+            // Jika tidak ada, tambahkan baru
+            _riwayatList.value = _riwayatList.value + riwayat
+        }
+        
+        // Reset form setelah simpan
+        resetForm()
+    }
+    
+    fun loadRiwayat(riwayat: RiwayatData) {
+        // Set current ID
+        _currentRiwayatId.value = riwayat.id
+        
+        // Load pelanggan data
+        _idPelanggan.value = riwayat.pelangganData.idPelanggan
+        _namaPelanggan.value = riwayat.pelangganData.nama
+        _alamatPelanggan.value = riwayat.pelangganData.alamat
+        _fotoPath.value = riwayat.pelangganData.fotoPath
+        
+        // Set mode
+        _mode.value = riwayat.mode
+        
+        // Load input data based on mode
+        if (riwayat.mode == 1) {
+            _arus.value = riwayat.inputData.arus
+            _classMeter.value = riwayat.inputData.classMeter
+            _blinkCount.value = riwayat.inputData.blinkCount
+            _elapsedTime.value = riwayat.inputData.elapsedTime
+            _selectedBlinkIndex.value = riwayat.inputData.selectedBlinkIndex
+            // Note: blinkRecords tidak bisa direstore sepenuhnya
+        } else {
+            _p1Input.value = riwayat.inputData.p1Input
+            _phaseR.value = riwayat.inputData.phaseR
+            _phaseS.value = riwayat.inputData.phaseS
+            _phaseT.value = riwayat.inputData.phaseT
+            _classMeter.value = riwayat.inputData.classMeter
+        }
+    }
+    
+    fun deleteRiwayat(id: String) {
+        _riwayatList.value = _riwayatList.value.filter { it.id != id }
+    }
+    
+    fun clearRiwayat() {
+        _riwayatList.value = emptyList()
+    }
+    
+    fun resetForm() {
+        _idPelanggan.value = ""
+        _namaPelanggan.value = ""
+        _alamatPelanggan.value = ""
+        _fotoPath.value = null
+        _currentRiwayatId.value = null
+        
+        if (_mode.value == 1) {
+            resetMode1()
+            _arus.value = "5.0"
+            _classMeter.value = "1.0"
+        } else {
+            _p1Input.value = "10.0"
+            _phaseR.value = "3.5"
+            _phaseS.value = "3.5"
+            _phaseT.value = "3.0"
+            _classMeter.value = "1.0"
+        }
+    }
+    
     fun isValidClassMeter(value: String): Boolean {
         val validValues = listOf("1.0", "0.5", "0.2", "1", "0.5", "0.2")
         return value in validValues
@@ -261,6 +399,14 @@ class KwhViewModel : ViewModel() {
             else -> false
         }
     }
+    
+    fun isFormValidForSave(): Boolean {
+        return idPelanggan.value.isNotEmpty() &&
+               namaPelanggan.value.isNotEmpty() &&
+               alamatPelanggan.value.isNotEmpty() &&
+               fotoPath.value != null &&
+               isCalculationValid()
+    }
 }
 
 // ================= UTILITY FUNCTIONS =================
@@ -277,6 +423,12 @@ fun createImageFile(context: Context): File {
 fun isValidClassMeter(value: String): Boolean {
     val validValues = listOf("1.0", "0.5", "0.2", "1", "0.5", "0.2")
     return value in validValues
+}
+
+// Helper function untuk format tanggal
+fun formatTimestamp(timestamp: Long): String {
+    val sdf = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault())
+    return sdf.format(Date(timestamp))
 }
 
 // ================= MAIN ACTIVITY =================
@@ -303,6 +455,42 @@ fun KwhMeterApp() {
 
 @Composable
 fun MainScreen(viewModel: KwhViewModel) {
+    var currentTab by remember { mutableStateOf(0) } // 0 = Input, 1 = Riwayat
+    
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Tab Navigation
+        TabRow(
+            selectedTabIndex = currentTab,
+            containerColor = Color(0xFF0D6EFD),
+            contentColor = Color.White
+        ) {
+            Tab(
+                selected = currentTab == 0,
+                onClick = { currentTab = 0 },
+                text = { Text("Input Data", color = Color.White) }
+            )
+            Tab(
+                selected = currentTab == 1,
+                onClick = { currentTab = 1 },
+                text = { 
+                    Text(
+                        "Riwayat (${viewModel.riwayatList.value.size})", 
+                        color = Color.White
+                    ) 
+                }
+            )
+        }
+        
+        // Tab Content
+        when (currentTab) {
+            0 -> InputDataScreen(viewModel)
+            1 -> RiwayatScreen(viewModel)
+        }
+    }
+}
+
+@Composable
+fun InputDataScreen(viewModel: KwhViewModel) {
     val mode by viewModel.mode.collectAsState()
     val blinkCount by viewModel.blinkCount.collectAsState()
     val elapsedTime by viewModel.elapsedTime.collectAsState()
@@ -325,6 +513,7 @@ fun MainScreen(viewModel: KwhViewModel) {
     // Calculations
     val results = viewModel.calculateResults()
     val isCalculationValid = viewModel.isCalculationValid()
+    val isFormValidForSave = viewModel.isFormValidForSave()
     
     // Timer
     LaunchedEffect(isCounting) {
@@ -355,8 +544,17 @@ fun MainScreen(viewModel: KwhViewModel) {
     ) { isGranted ->
         if (isGranted) {
             // Permission granted, proceed with camera
-            takePhoto(context, cameraLauncher, currentPhotoPath) { path ->
-                currentPhotoPath = path
+            try {
+                val file = createImageFile(context)
+                currentPhotoPath = file.absolutePath
+                val photoURI: Uri = FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.provider",
+                    file
+                )
+                cameraLauncher.launch(photoURI)
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         } else {
             // Permission denied
@@ -371,47 +569,11 @@ fun MainScreen(viewModel: KwhViewModel) {
             title = { Text("Izin Kamera Diperlukan") },
             text = { Text("Aplikasi memerlukan izin kamera untuk mengambil foto dokumentasi") },
             confirmButton = {
-                Button(
-                    onClick = {
-                        showPermissionDialog = false
-                        // Open app settings
-                        // val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                        // intent.data = Uri.parse("package:${context.packageName}")
-                        // context.startActivity(intent)
-                    }
-                ) {
+                Button(onClick = { showPermissionDialog = false }) {
                     Text("OK")
                 }
             }
         )
-    }
-    
-    // Function to handle photo capture - dibuat sebagai local function
-    fun handlePhotoCapture() {
-        when {
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.CAMERA
-            ) == PackageManager.PERMISSION_GRANTED -> {
-                // Permission already granted
-                takePhoto(context, cameraLauncher, currentPhotoPath) { path ->
-                    currentPhotoPath = path
-                }
-            }
-            
-            shouldShowRequestPermissionRationale(
-                context,
-                Manifest.permission.CAMERA
-            ) -> {
-                // Show explanation dialog
-                showPermissionDialog = true
-            }
-            
-            else -> {
-                // Request permission
-                permissionLauncher.launch(Manifest.permission.CAMERA)
-            }
-        }
     }
     
     Column(
@@ -478,7 +640,8 @@ fun MainScreen(viewModel: KwhViewModel) {
                     value = idPelanggan,
                     onValueChange = { viewModel.setIdPelanggan(it) },
                     label = { Text("ID Pelanggan") },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    isError = idPelanggan.isEmpty()
                 )
 
                 Spacer(Modifier.height(8.dp))
@@ -487,7 +650,8 @@ fun MainScreen(viewModel: KwhViewModel) {
                     value = namaPelanggan,
                     onValueChange = { viewModel.setNamaPelanggan(it) },
                     label = { Text("Nama Pelanggan") },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    isError = namaPelanggan.isEmpty()
                 )
 
                 Spacer(Modifier.height(8.dp))
@@ -497,13 +661,34 @@ fun MainScreen(viewModel: KwhViewModel) {
                     onValueChange = { viewModel.setAlamatPelanggan(it) },
                     label = { Text("Alamat") },
                     modifier = Modifier.fillMaxWidth(),
-                    maxLines = 3
+                    maxLines = 3,
+                    isError = alamatPelanggan.isEmpty()
                 )
 
                 Spacer(Modifier.height(12.dp))
 
                 Button(
-                    onClick = { handlePhotoCapture() },
+                    onClick = {
+                        val permission = Manifest.permission.CAMERA
+                        if (ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) {
+                            // Permission already granted
+                            try {
+                                val file = createImageFile(context)
+                                currentPhotoPath = file.absolutePath
+                                val photoURI: Uri = FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.provider",
+                                    file
+                                )
+                                cameraLauncher.launch(photoURI)
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                        } else {
+                            // Request permission
+                            permissionLauncher.launch(permission)
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     enabled = idPelanggan.isNotEmpty() && namaPelanggan.isNotEmpty()
                 ) {
@@ -603,22 +788,34 @@ fun MainScreen(viewModel: KwhViewModel) {
             )
         }
 
-        // Save Button
+        // Action Buttons
         Spacer(Modifier.height(16.dp))
-        Button(
-            onClick = {
-                // Save pelanggan data logic here
-                // TODO: Implement save functionality
-            },
-            enabled = idPelanggan.isNotEmpty() &&
-                      namaPelanggan.isNotEmpty() &&
-                      alamatPelanggan.isNotEmpty() &&
-                      fotoPath != null,
-            modifier = Modifier.fillMaxWidth()
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Icon(Icons.Default.Save, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("Simpan Data Pelanggan")
+            // Reset Button
+            OutlinedButton(
+                onClick = { viewModel.resetForm() },
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = "Reset")
+                Spacer(Modifier.width(8.dp))
+                Text("Reset Form")
+            }
+            
+            // Save Button
+            Button(
+                onClick = { viewModel.saveRiwayat() },
+                enabled = isFormValidForSave,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Icon(Icons.Default.Save, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(if (viewModel.currentRiwayatId.value != null) "Update" else "Simpan")
+            }
         }
 
         // Info Section
@@ -694,47 +891,321 @@ fun MainScreen(viewModel: KwhViewModel) {
     }
 }
 
-// Helper function for taking photo
-private fun takePhoto(
-    context: Context,
-    cameraLauncher: androidx.activity.compose.ManagedActivityResultLauncher<Uri, Boolean>,
-    currentPhotoPath: String,
-    onPathUpdated: (String) -> Unit
-) {
-    try {
-        val file = createImageFile(context)
-        val newPath = file.absolutePath
-        onPathUpdated(newPath)
+@Composable
+fun RiwayatScreen(viewModel: KwhViewModel) {
+    val riwayatList by viewModel.riwayatList.collectAsState()
+    
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        // Header
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .shadow(4.dp, RoundedCornerShape(12.dp)),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF0D6EFD)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        "Riwayat Perhitungan",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 20.sp
+                    )
+                    Text(
+                        "Total: ${riwayatList.size} data",
+                        color = Color.White.copy(alpha = 0.8f),
+                        fontSize = 12.sp
+                    )
+                }
+                
+                if (riwayatList.isNotEmpty()) {
+                    IconButton(
+                        onClick = { viewModel.clearRiwayat() },
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "Hapus Semua",
+                            tint = Color.White
+                        )
+                    }
+                }
+            }
+        }
         
-        val photoURI: Uri = FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.provider",
-            file
-        )
+        Spacer(Modifier.height(16.dp))
         
-        // Grant temporary read permission to the camera app
-        val intentFlags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                         android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-        context.grantUriPermission(
-            "com.android.camera",
-            photoURI,
-            intentFlags
-        )
-        
-        cameraLauncher.launch(photoURI)
-    } catch (e: Exception) {
-        e.printStackTrace()
-        // Handle error (could show a Toast or Snackbar)
+        if (riwayatList.isEmpty()) {
+            // Empty state
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Icon(
+                        Icons.Default.History,
+                        contentDescription = "Riwayat Kosong",
+                        modifier = Modifier.size(80.dp),
+                        tint = Color(0xFF6C757D)
+                    )
+                    Text(
+                        "Belum ada riwayat perhitungan",
+                        fontSize = 16.sp,
+                        color = Color(0xFF6C757D)
+                    )
+                    Text(
+                        "Simpan data perhitungan untuk melihat riwayat di sini",
+                        fontSize = 12.sp,
+                        color = Color(0xFF6C757D),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
+            }
+        } else {
+            // Riwayat list
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(riwayatList.sortedByDescending { it.timestamp }) { riwayat ->
+                    RiwayatItem(
+                        riwayat = riwayat,
+                        onEdit = { viewModel.loadRiwayat(riwayat) },
+                        onDelete = { viewModel.deleteRiwayat(riwayat.id) }
+                    )
+                }
+            }
+        }
     }
 }
 
-// Helper function to check permission rationale
-private fun shouldShowRequestPermissionRationale(context: Context, permission: String): Boolean {
-    val activity = context as? androidx.activity.ComponentActivity
-    return activity?.shouldShowRequestPermissionRationale(permission) ?: false
+@Composable
+fun RiwayatItem(
+    riwayat: RiwayatData,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    
+    // Delete confirmation dialog
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text("Hapus Riwayat") },
+            text = { Text("Apakah Anda yakin ingin menghapus riwayat ini?") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onDelete()
+                        showDeleteDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC3545))
+                ) {
+                    Text("Hapus")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) {
+                    Text("Batal")
+                }
+            }
+        )
+    }
+    
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "${riwayat.pelangganData.nama} - ${riwayat.pelangganData.idPelanggan}",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        color = Color(0xFF333333)
+                    )
+                    Text(
+                        formatTimestamp(riwayat.timestamp),
+                        fontSize = 12.sp,
+                        color = Color(0xFF6C757D)
+                    )
+                    Text(
+                        "Mode: ${if (riwayat.mode == 1) "1 Phase" else "3 Phase"}",
+                        fontSize = 12.sp,
+                        color = if (riwayat.mode == 1) Color(0xFF0D6EFD) else Color(0xFF198754),
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+                
+                // Action buttons
+                Row {
+                    IconButton(
+                        onClick = onEdit,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Edit,
+                            contentDescription = "Edit",
+                            tint = Color(0xFF0D6EFD)
+                        )
+                    }
+                    IconButton(
+                        onClick = { showDeleteDialog = true },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "Delete",
+                            tint = Color(0xFFDC3545)
+                        )
+                    }
+                }
+            }
+            
+            Spacer(Modifier.height(12.dp))
+            
+            // Alamat
+            Text(
+                "Alamat: ${riwayat.pelangganData.alamat}",
+                fontSize = 12.sp,
+                color = Color(0xFF6C757D)
+            )
+            
+            Spacer(Modifier.height(12.dp))
+            
+            // Calculation Results
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F9FA)),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "P1",
+                                fontSize = 11.sp,
+                                color = Color(0xFF6C757D)
+                            )
+                            Text(
+                                String.format("%.3f", riwayat.calculationResult.p1) + " kW",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF0D6EFD)
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "P2",
+                                fontSize = 11.sp,
+                                color = Color(0xFF6C757D)
+                            )
+                            Text(
+                                String.format("%.3f", riwayat.calculationResult.p2) + " kW",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF198754)
+                            )
+                        }
+                    }
+                    
+                    Spacer(Modifier.height(8.dp))
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "ERROR",
+                                fontSize = 11.sp,
+                                color = Color(0xFF6C757D)
+                            )
+                            Text(
+                                String.format("%.2f", riwayat.calculationResult.error) + "%",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (Math.abs(riwayat.calculationResult.error) <= riwayat.calculationResult.kelasMeter) 
+                                    Color(0xFF198754) 
+                                else Color(0xFFDC3545)
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "STATUS",
+                                fontSize = 11.sp,
+                                color = Color(0xFF6C757D)
+                            )
+                            Text(
+                                riwayat.calculationResult.status,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (riwayat.calculationResult.status == "DI DALAM KELAS METER") 
+                                    Color(0xFF198754) 
+                                else Color(0xFFDC3545)
+                            )
+                        }
+                    }
+                }
+            }
+            
+            // Input Data Summary
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "Input Data:",
+                fontSize = 12.sp,
+                color = Color(0xFF6C757D),
+                fontWeight = FontWeight.Medium
+            )
+            
+            if (riwayat.mode == 1) {
+                Text(
+                    "• Arus: ${riwayat.inputData.arus}A | Kedipan: ${riwayat.inputData.blinkCount} | Waktu: ${String.format("%.2f", riwayat.inputData.elapsedTime/1000.0)}s",
+                    fontSize = 11.sp,
+                    color = Color(0xFF6C757D)
+                )
+            } else {
+                Text(
+                    "• P1: ${riwayat.inputData.p1Input}kW | R:${riwayat.inputData.phaseR} S:${riwayat.inputData.phaseS} T:${riwayat.inputData.phaseT}",
+                    fontSize = 11.sp,
+                    color = Color(0xFF6C757D)
+                )
+            }
+        }
+    }
 }
 
-// ================= REMAINING COMPOSABLE FUNCTIONS =================
+// ================= REMAINING COMPOSABLE FUNCTIONS (Mode1Screen, Mode2Screen, etc.) =================
+// [Mode1Screen, Mode2Screen, ResultBox, PhaseInputField, PhaseResultBox, BlinkRecordItem]
+// These functions remain exactly the same as in the previous version
+
 @Composable
 fun Mode1Screen(
     blinkCount: Int,
@@ -936,7 +1407,7 @@ fun Mode1Screen(
                     ) {
                         Icon(Icons.Default.Refresh, contentDescription = "Reset")
                         Spacer(Modifier.width(8.dp))
-                        Text("Reset")
+                        Text("Reset Timer")
                     }
                 }
                 
