@@ -102,10 +102,11 @@ dependencies {
     implementation("androidx.compose.runtime:runtime-livedata")
     
     implementation("androidx.core:core-ktx:1.12.0")
-    
+    implementation("androidx.datastore:datastore-preferences:1.0.0")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
-    
+    implementation ("com.google.accompanist:accompanist-permissions:0.32.0")
     androidTestImplementation(platform("androidx.compose:compose-bom:2024.02.00"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
 }

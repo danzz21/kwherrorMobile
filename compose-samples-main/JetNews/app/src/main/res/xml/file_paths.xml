@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- For accessing external storage -->
+    <external-files-path name="my_images" path="Pictures" />
+    <external-files-path name="my_docs" path="Documents" />
+    
+    <!-- For accessing cache directory -->
+    <cache-path name="cache" path="/" />
+    
+    <!-- For accessing app-specific external storage -->
+    <external-path name="external" path="." />
+    
+    <!-- For accessing app-specific internal storage -->
+    <files-path name="files" path="." />
+</paths>
