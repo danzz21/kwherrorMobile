@@ -1,15 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
-<paths>
-    <!-- For accessing external storage -->
-    <external-files-path name="my_images" path="Pictures" />
-    <external-files-path name="my_docs" path="Documents" />
-    
-    <!-- For accessing cache directory -->
-    <cache-path name="cache" path="/" />
-    
-    <!-- For accessing app-specific external storage -->
-    <external-path name="external" path="." />
-    
-    <!-- For accessing app-specific internal storage -->
-    <files-path name="files" path="." />
-</paths>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- External files directory -->
+    <external-files-path 
+        name="my_images" 
+        path="Pictures" />
+    <!-- External cache directory -->
+    <external-cache-path 
+        name="my_cache" 
+        path="." />
+    <!-- External storage -->
+    <external-path 
+        name="external" 
+        path="." />
+    <!-- Cache directory -->
+    <cache-path 
+        name="cache" 
+        path="." />
+    <!-- Files directory -->
+    <files-path 
+        name="files" 
+        path="." />
+</paths> 

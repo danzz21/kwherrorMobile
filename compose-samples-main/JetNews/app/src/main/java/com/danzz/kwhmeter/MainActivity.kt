@@ -1,10 +1,16 @@
 package com.danzz.kwhmeter
 
 import android.Manifest
+import android.app.Activity
+import android.app.Application
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -29,15 +35,24 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
 import java.io.File
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -65,14 +80,11 @@ data class CalculationResult(
 )
 
 data class InputData(
-    // Mode 1
     val arus: String = "",
     val classMeter: String = "",
     val selectedBlinkIndex: Int? = null,
     val blinkCount: Int = 0,
     val elapsedTime: Long = 0,
-    
-    // Mode 2
     val p1Input: String = "",
     val phaseR: String = "",
     val phaseS: String = "",
@@ -83,13 +95,63 @@ data class RiwayatData(
     val id: String = UUID.randomUUID().toString(),
     val timestamp: Long = System.currentTimeMillis(),
     val pelangganData: PelangganData,
-    val mode: Int, // 1 = 1 Phase, 2 = 3 Phase
+    val mode: Int,
     val inputData: InputData,
     val calculationResult: CalculationResult
 )
 
+// ================= SIMPLE STORAGE MANAGER =================
+object SimpleStorageManager {
+    private const val RIWAYAT_LIST_KEY = "riwayat_list"
+    private val gson = Gson()
+    
+    fun saveRiwayat(context: Context, riwayat: RiwayatData) {
+        val sharedPref = context.getSharedPreferences("kwh_storage", Context.MODE_PRIVATE)
+        val currentList = getRiwayatList(context).toMutableList()
+        val existingIndex = currentList.indexOfFirst { it.id == riwayat.id }
+        
+        if (existingIndex != -1) {
+            currentList[existingIndex] = riwayat
+        } else {
+            currentList.add(riwayat)
+        }
+        
+        val json = gson.toJson(currentList)
+        sharedPref.edit().putString(RIWAYAT_LIST_KEY, json).apply()
+    }
+    
+    fun getRiwayatList(context: Context): List<RiwayatData> {
+        val sharedPref = context.getSharedPreferences("kwh_storage", Context.MODE_PRIVATE)
+        val json = sharedPref.getString(RIWAYAT_LIST_KEY, "[]") ?: "[]"
+        return try {
+            val type = object : TypeToken<List<RiwayatData>>() {}.type
+            gson.fromJson<List<RiwayatData>>(json, type) ?: emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+    
+    fun getRiwayatById(context: Context, id: String): RiwayatData? {
+        return getRiwayatList(context).find { it.id == id }
+    }
+    
+    fun deleteRiwayatById(context: Context, id: String) {
+        val sharedPref = context.getSharedPreferences("kwh_storage", Context.MODE_PRIVATE)
+        val currentList = getRiwayatList(context)
+        val newList = currentList.filter { it.id != id }
+        val json = gson.toJson(newList)
+        sharedPref.edit().putString(RIWAYAT_LIST_KEY, json).apply()
+    }
+    
+    fun deleteAllRiwayat(context: Context) {
+        val sharedPref = context.getSharedPreferences("kwh_storage", Context.MODE_PRIVATE)
+        sharedPref.edit().remove(RIWAYAT_LIST_KEY).apply()
+    }
+}
+
 // ================= VIEWMODEL =================
-class KwhViewModel : ViewModel() {
+class KwhViewModel(application: Application) : AndroidViewModel(application) {
+    
     // Mode: 1 = 1 Phase, 2 = 3 Phase
     private val _mode = MutableStateFlow(1)
     val mode: StateFlow<Int> = _mode.asStateFlow()
@@ -146,11 +208,11 @@ class KwhViewModel : ViewModel() {
     private val _fotoPath = MutableStateFlow<String?>(null)
     val fotoPath: StateFlow<String?> = _fotoPath.asStateFlow()
     
-    // Riwayat data
+    // Riwayat data from storage
     private val _riwayatList = MutableStateFlow<List<RiwayatData>>(emptyList())
     val riwayatList: StateFlow<List<RiwayatData>> = _riwayatList.asStateFlow()
     
-    // Current riwayat ID untuk edit/hapus
+    // Current riwayat ID untuk edit
     private val _currentRiwayatId = MutableStateFlow<String?>(null)
     val currentRiwayatId: StateFlow<String?> = _currentRiwayatId.asStateFlow()
     
@@ -159,6 +221,19 @@ class KwhViewModel : ViewModel() {
         const val VOLTAGE = 220.0
         const val COSPHI = 0.85
         const val CONSTANTA = 1600.0
+    }
+    
+    init {
+        loadRiwayatFromStorage()
+    }
+    
+    // Load data dari storage
+    private fun loadRiwayatFromStorage() {
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            val list = SimpleStorageManager.getRiwayatList(context)
+            _riwayatList.value = list
+        }
     }
     
     // Setters
@@ -180,8 +255,6 @@ class KwhViewModel : ViewModel() {
     fun setNamaPelanggan(value: String) { _namaPelanggan.value = value }
     fun setAlamatPelanggan(value: String) { _alamatPelanggan.value = value }
     fun setFotoPath(value: String?) { _fotoPath.value = value }
-    
-    fun setCurrentRiwayatId(id: String?) { _currentRiwayatId.value = id }
     
     // Timer functions
     fun startTimer() {
@@ -211,7 +284,6 @@ class KwhViewModel : ViewModel() {
         val newRecord = BlinkRecord(_blinkCount.value, currentTime)
         _blinkRecords.value = _blinkRecords.value + newRecord
         
-        // Auto-select latest blink if none selected
         if (_selectedBlinkIndex.value == null) {
             _selectedBlinkIndex.value = _blinkCount.value - 1
         }
@@ -278,87 +350,96 @@ class KwhViewModel : ViewModel() {
         }
     }
     
-    // Riwayat functions
+    // Storage operations
     fun saveRiwayat() {
-        val pelangganData = PelangganData(
-            idPelanggan = _idPelanggan.value,
-            nama = _namaPelanggan.value,
-            alamat = _alamatPelanggan.value,
-            fotoPath = _fotoPath.value ?: "",
-            timestamp = System.currentTimeMillis()
-        )
-        
-        val inputData = InputData(
-            arus = _arus.value,
-            classMeter = _classMeter.value,
-            selectedBlinkIndex = _selectedBlinkIndex.value,
-            blinkCount = _blinkCount.value,
-            elapsedTime = _elapsedTime.value,
-            p1Input = _p1Input.value,
-            phaseR = _phaseR.value,
-            phaseS = _phaseS.value,
-            phaseT = _phaseT.value
-        )
-        
-        val calculationResult = calculateResults()
-        
-        val riwayat = RiwayatData(
-            pelangganData = pelangganData,
-            mode = _mode.value,
-            inputData = inputData,
-            calculationResult = calculationResult
-        )
-        
-        // Jika ada currentRiwayatId, update data yang ada
-        _currentRiwayatId.value?.let { currentId ->
-            _riwayatList.value = _riwayatList.value.map { 
-                if (it.id == currentId) riwayat.copy(id = currentId) else it 
+        viewModelScope.launch {
+            try {
+                val calculationResult = calculateResults()
+                val context = getApplication<Application>()
+                
+                val riwayatData = RiwayatData(
+                    id = _currentRiwayatId.value ?: UUID.randomUUID().toString(),
+                    timestamp = System.currentTimeMillis(),
+                    pelangganData = PelangganData(
+                        idPelanggan = _idPelanggan.value,
+                        nama = _namaPelanggan.value,
+                        alamat = _alamatPelanggan.value,
+                        fotoPath = _fotoPath.value ?: ""
+                    ),
+                    mode = _mode.value,
+                    inputData = InputData(
+                        arus = _arus.value,
+                        classMeter = _classMeter.value,
+                        selectedBlinkIndex = _selectedBlinkIndex.value,
+                        blinkCount = _blinkCount.value,
+                        elapsedTime = _elapsedTime.value,
+                        p1Input = _p1Input.value,
+                        phaseR = _phaseR.value,
+                        phaseS = _phaseS.value,
+                        phaseT = _phaseT.value
+                    ),
+                    calculationResult = calculationResult
+                )
+                
+                SimpleStorageManager.saveRiwayat(context, riwayatData)
+                loadRiwayatFromStorage()
+                resetForm()
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
-        } ?: run {
-            // Jika tidak ada, tambahkan baru
-            _riwayatList.value = _riwayatList.value + riwayat
         }
-        
-        // Reset form setelah simpan
-        resetForm()
     }
     
-    fun loadRiwayat(riwayat: RiwayatData) {
-        // Set current ID
-        _currentRiwayatId.value = riwayat.id
-        
-        // Load pelanggan data
-        _idPelanggan.value = riwayat.pelangganData.idPelanggan
-        _namaPelanggan.value = riwayat.pelangganData.nama
-        _alamatPelanggan.value = riwayat.pelangganData.alamat
-        _fotoPath.value = riwayat.pelangganData.fotoPath
-        
-        // Set mode
-        _mode.value = riwayat.mode
-        
-        // Load input data based on mode
-        if (riwayat.mode == 1) {
-            _arus.value = riwayat.inputData.arus
-            _classMeter.value = riwayat.inputData.classMeter
-            _blinkCount.value = riwayat.inputData.blinkCount
-            _elapsedTime.value = riwayat.inputData.elapsedTime
-            _selectedBlinkIndex.value = riwayat.inputData.selectedBlinkIndex
-            // Note: blinkRecords tidak bisa direstore sepenuhnya
-        } else {
-            _p1Input.value = riwayat.inputData.p1Input
-            _phaseR.value = riwayat.inputData.phaseR
-            _phaseS.value = riwayat.inputData.phaseS
-            _phaseT.value = riwayat.inputData.phaseT
-            _classMeter.value = riwayat.inputData.classMeter
+    fun loadRiwayat(id: String) {
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            val riwayat = SimpleStorageManager.getRiwayatById(context, id)
+            riwayat?.let {
+                _currentRiwayatId.value = it.id
+                _idPelanggan.value = it.pelangganData.idPelanggan
+                _namaPelanggan.value = it.pelangganData.nama
+                _alamatPelanggan.value = it.pelangganData.alamat
+                _fotoPath.value = it.pelangganData.fotoPath
+                _mode.value = it.mode
+                
+                if (it.mode == 1) {
+                    _arus.value = it.inputData.arus
+                    _classMeter.value = it.inputData.classMeter
+                    _blinkCount.value = it.inputData.blinkCount
+                    _elapsedTime.value = it.inputData.elapsedTime
+                    _selectedBlinkIndex.value = it.inputData.selectedBlinkIndex
+                    
+                    // Reconstruct blink records
+                    val records = mutableListOf<BlinkRecord>()
+                    for (i in 1..it.inputData.blinkCount) {
+                        records.add(BlinkRecord(i, it.inputData.elapsedTime / 1000.0))
+                    }
+                    _blinkRecords.value = records
+                } else {
+                    _p1Input.value = it.inputData.p1Input
+                    _phaseR.value = it.inputData.phaseR
+                    _phaseS.value = it.inputData.phaseS
+                    _phaseT.value = it.inputData.phaseT
+                    _classMeter.value = it.inputData.classMeter
+                }
+            }
         }
     }
     
     fun deleteRiwayat(id: String) {
-        _riwayatList.value = _riwayatList.value.filter { it.id != id }
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            SimpleStorageManager.deleteRiwayatById(context, id)
+            loadRiwayatFromStorage()
+        }
     }
     
     fun clearRiwayat() {
-        _riwayatList.value = emptyList()
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            SimpleStorageManager.deleteAllRiwayat(context)
+            _riwayatList.value = emptyList()
+        }
     }
     
     fun resetForm() {
@@ -410,14 +491,31 @@ class KwhViewModel : ViewModel() {
 }
 
 // ================= UTILITY FUNCTIONS =================
-fun createImageFile(context: Context): File {
-    val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-    val storageDir = context.getExternalFilesDir(null)
-    return File.createTempFile(
-        "JPEG_${timeStamp}_",
-        ".jpg",
-        storageDir
-    )
+fun createImageFile(context: Context): File? {
+    return try {
+        // Create an image file name
+        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+        val imageFileName = "JPEG_" + timeStamp + "_"
+        
+        // Get the pictures directory
+        val storageDir = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+        
+        // Create the directory if it doesn't exist
+        if (!storageDir?.exists()!!) {
+            storageDir.mkdirs()
+        }
+        
+        // Create the file
+        File.createTempFile(
+            imageFileName,  /* prefix */
+            ".jpg",         /* suffix */
+            storageDir      /* directory */
+        )
+    } catch (ex: IOException) {
+        // Error occurred while creating the File
+        ex.printStackTrace()
+        null
+    }
 }
 
 fun isValidClassMeter(value: String): Boolean {
@@ -425,7 +523,6 @@ fun isValidClassMeter(value: String): Boolean {
     return value in validValues
 }
 
-// Helper function untuk format tanggal
 fun formatTimestamp(timestamp: Long): String {
     val sdf = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault())
     return sdf.format(Date(timestamp))
@@ -443,7 +540,15 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun KwhMeterApp() {
-    val viewModel: KwhViewModel = viewModel()
+    val context = LocalContext.current
+    val viewModel: KwhViewModel = viewModel(
+        factory = object : ViewModelProvider.Factory {
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                @Suppress("UNCHECKED_CAST")
+                return KwhViewModel(context.applicationContext as Application) as T
+            }
+        }
+    )
     
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -455,10 +560,9 @@ fun KwhMeterApp() {
 
 @Composable
 fun MainScreen(viewModel: KwhViewModel) {
-    var currentTab by remember { mutableStateOf(0) } // 0 = Input, 1 = Riwayat
+    var currentTab by remember { mutableStateOf(0) }
     
     Column(modifier = Modifier.fillMaxSize()) {
-        // Tab Navigation
         TabRow(
             selectedTabIndex = currentTab,
             containerColor = Color(0xFF0D6EFD),
@@ -473,24 +577,21 @@ fun MainScreen(viewModel: KwhViewModel) {
                 selected = currentTab == 1,
                 onClick = { currentTab = 1 },
                 text = { 
-                    Text(
-                        "Riwayat (${viewModel.riwayatList.value.size})", 
-                        color = Color.White
-                    ) 
+                    val riwayatCount by viewModel.riwayatList.collectAsState()
+                    Text("Riwayat (${riwayatCount.size})", color = Color.White) 
                 }
             )
         }
         
-        // Tab Content
         when (currentTab) {
-            0 -> InputDataScreen(viewModel)
-            1 -> RiwayatScreen(viewModel)
+            0 -> InputDataScreen(viewModel, onNavigateToRiwayat = { currentTab = 1 })
+            1 -> RiwayatScreen(viewModel, onNavigateToInput = { currentTab = 0 })
         }
     }
 }
 
 @Composable
-fun InputDataScreen(viewModel: KwhViewModel) {
+fun InputDataScreen(viewModel: KwhViewModel, onNavigateToRiwayat: () -> Unit) {
     val mode by viewModel.mode.collectAsState()
     val blinkCount by viewModel.blinkCount.collectAsState()
     val elapsedTime by viewModel.elapsedTime.collectAsState()
@@ -504,18 +605,25 @@ fun InputDataScreen(viewModel: KwhViewModel) {
     val blinkRecords by viewModel.blinkRecords.collectAsState()
     val selectedBlinkIndex by viewModel.selectedBlinkIndex.collectAsState()
     
-    // Pelanggan data
     val idPelanggan by viewModel.idPelanggan.collectAsState()
     val namaPelanggan by viewModel.namaPelanggan.collectAsState()
     val alamatPelanggan by viewModel.alamatPelanggan.collectAsState()
     val fotoPath by viewModel.fotoPath.collectAsState()
+    val currentRiwayatId by viewModel.currentRiwayatId.collectAsState()
     
-    // Calculations
     val results = viewModel.calculateResults()
     val isCalculationValid = viewModel.isCalculationValid()
     val isFormValidForSave = viewModel.isFormValidForSave()
     
-    // Timer
+    var showSaveSuccess by remember { mutableStateOf(false) }
+    var showSaveError by remember { mutableStateOf(false) }
+    
+    // Camera related states
+    val context = LocalContext.current
+    var capturedImagePath by rememberSaveable { mutableStateOf<String?>(null) }
+    var showPermissionDialog by remember { mutableStateOf(false) }
+    var showPermissionRationale by remember { mutableStateOf(false) }
+    
     LaunchedEffect(isCounting) {
         while (isCounting) {
             delay(10)
@@ -524,52 +632,182 @@ fun InputDataScreen(viewModel: KwhViewModel) {
         }
     }
     
-    // Camera related states and launchers
-    val context = LocalContext.current
-    var currentPhotoPath by rememberSaveable { mutableStateOf("") }
-    var showPermissionDialog by remember { mutableStateOf(false) }
-    
     // Camera launcher
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
     ) { success ->
-        if (success) {
-            viewModel.setFotoPath(currentPhotoPath)
+        if (success && capturedImagePath != null) {
+            viewModel.setFotoPath(capturedImagePath!!)
+            Toast.makeText(context, "Foto berhasil diambil", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "Gagal mengambil foto", Toast.LENGTH_SHORT).show()
         }
     }
     
-    // Camera permission launcher
+    // Permission launcher
     val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
+        ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            // Permission granted, proceed with camera
-            try {
-                val file = createImageFile(context)
-                currentPhotoPath = file.absolutePath
-                val photoURI: Uri = FileProvider.getUriForFile(
+            // Permission granted, prepare to open camera
+            val file = createImageFile(context)
+            if (file != null) {
+                capturedImagePath = file.absolutePath
+                val photoURI = FileProvider.getUriForFile(
                     context,
-                    "${context.packageName}.provider",
+                    "${context.packageName}.fileprovider",
                     file
                 )
                 cameraLauncher.launch(photoURI)
-            } catch (e: Exception) {
-                e.printStackTrace()
+            } else {
+                Toast.makeText(context, "Gagal membuat file", Toast.LENGTH_SHORT).show()
             }
         } else {
             // Permission denied
-            showPermissionDialog = true
+            if (ActivityCompat.shouldShowRequestPermissionRationale(
+                    context as Activity,
+                    Manifest.permission.CAMERA
+                )
+            ) {
+                showPermissionRationale = true
+            } else {
+                showPermissionDialog = true
+            }
         }
     }
     
-    // Permission dialog
+    // Open settings launcher
+    val settingsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { _ ->
+        // Coba lagi setelah user kembali dari settings
+        permissionLauncher.launch(Manifest.permission.CAMERA)
+    }
+    
+    // Function to open camera
+    fun openCamera() {
+        val permission = Manifest.permission.CAMERA
+        val permissionCheckResult = ContextCompat.checkSelfPermission(context, permission)
+        
+        when {
+            permissionCheckResult == PackageManager.PERMISSION_GRANTED -> {
+                // Permission sudah diberikan
+                val file = createImageFile(context)
+                if (file != null) {
+                    capturedImagePath = file.absolutePath
+                    val photoURI = FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        file
+                    )
+                    cameraLauncher.launch(photoURI)
+                } else {
+                    Toast.makeText(context, "Gagal membuat file", Toast.LENGTH_SHORT).show()
+                }
+            }
+            
+            ActivityCompat.shouldShowRequestPermissionRationale(
+                context as Activity,
+                permission
+            ) -> {
+                // Show rationale
+                showPermissionRationale = true
+            }
+            
+            else -> {
+                // Request permission
+                permissionLauncher.launch(permission)
+            }
+        }
+    }
+    
+    // Dialogs
     if (showPermissionDialog) {
         AlertDialog(
             onDismissRequest = { showPermissionDialog = false },
             title = { Text("Izin Kamera Diperlukan") },
-            text = { Text("Aplikasi memerlukan izin kamera untuk mengambil foto dokumentasi") },
+            text = { 
+                Text("Aplikasi memerlukan izin kamera untuk mengambil foto. " +
+                     "Silakan aktifkan izin kamera di pengaturan aplikasi.")
+            },
             confirmButton = {
-                Button(onClick = { showPermissionDialog = false }) {
+                Button(
+                    onClick = {
+                        showPermissionDialog = false
+                        // Buka settings
+                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                        val uri = Uri.fromParts("package", context.packageName, null)
+                        intent.data = uri
+                        settingsLauncher.launch(intent)
+                    }
+                ) {
+                    Text("Buka Pengaturan")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPermissionDialog = false }) {
+                    Text("Tutup")
+                }
+            }
+        )
+    }
+    
+    if (showPermissionRationale) {
+        AlertDialog(
+            onDismissRequest = { showPermissionRationale = false },
+            title = { Text("Izin Kamera Diperlukan") },
+            text = { 
+                Text("Aplikasi memerlukan izin kamera untuk mengambil foto dokumentasi pelanggan. " +
+                     "Foto diperlukan sebagai bukti fisik pengukuran.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showPermissionRationale = false
+                        permissionLauncher.launch(Manifest.permission.CAMERA)
+                    }
+                ) {
+                    Text("Izinkan")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPermissionRationale = false }) {
+                    Text("Tolak")
+                }
+            }
+        )
+    }
+    
+    if (showSaveSuccess) {
+        AlertDialog(
+            onDismissRequest = { showSaveSuccess = false },
+            title = { Text("Berhasil") },
+            text = { Text("Data berhasil disimpan") },
+            confirmButton = {
+                Button(
+                    onClick = { 
+                        showSaveSuccess = false
+                        onNavigateToRiwayat()
+                    }
+                ) {
+                    Text("Lihat Riwayat")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSaveSuccess = false }) {
+                    Text("Tutup")
+                }
+            }
+        )
+    }
+    
+    if (showSaveError) {
+        AlertDialog(
+            onDismissRequest = { showSaveError = false },
+            title = { Text("Gagal") },
+            text = { Text("Gagal menyimpan data. Pastikan semua data sudah lengkap") },
+            confirmButton = {
+                Button(onClick = { showSaveError = false }) {
                     Text("OK")
                 }
             }
@@ -606,7 +844,7 @@ fun InputDataScreen(viewModel: KwhViewModel) {
                         fontSize = 20.sp
                     )
                     Text(
-                        "Error Calculation Tool",
+                        "Data tersimpan lokal",
                         color = Color.White.copy(alpha = 0.8f),
                         fontSize = 12.sp
                     )
@@ -621,25 +859,40 @@ fun InputDataScreen(viewModel: KwhViewModel) {
 
         Spacer(Modifier.height(16.dp))
 
-        // Pelanggan Input Section
+        // Pelanggan Input
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = Color.White),
             shape = RoundedCornerShape(12.dp)
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    "Data Pelanggan",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Data Pelanggan",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                    
+                    if (currentRiwayatId != null) {
+                        Badge(
+                            containerColor = Color(0xFFFFC107),
+                            contentColor = Color.Black
+                        ) {
+                            Text("EDIT MODE")
+                        }
+                    }
+                }
 
                 Spacer(Modifier.height(12.dp))
 
                 OutlinedTextField(
                     value = idPelanggan,
                     onValueChange = { viewModel.setIdPelanggan(it) },
-                    label = { Text("ID Pelanggan") },
+                    label = { Text("ID Pelanggan *") },
                     modifier = Modifier.fillMaxWidth(),
                     isError = idPelanggan.isEmpty()
                 )
@@ -649,7 +902,7 @@ fun InputDataScreen(viewModel: KwhViewModel) {
                 OutlinedTextField(
                     value = namaPelanggan,
                     onValueChange = { viewModel.setNamaPelanggan(it) },
-                    label = { Text("Nama Pelanggan") },
+                    label = { Text("Nama Pelanggan *") },
                     modifier = Modifier.fillMaxWidth(),
                     isError = namaPelanggan.isEmpty()
                 )
@@ -659,7 +912,7 @@ fun InputDataScreen(viewModel: KwhViewModel) {
                 OutlinedTextField(
                     value = alamatPelanggan,
                     onValueChange = { viewModel.setAlamatPelanggan(it) },
-                    label = { Text("Alamat") },
+                    label = { Text("Alamat *") },
                     modifier = Modifier.fillMaxWidth(),
                     maxLines = 3,
                     isError = alamatPelanggan.isEmpty()
@@ -667,44 +920,40 @@ fun InputDataScreen(viewModel: KwhViewModel) {
 
                 Spacer(Modifier.height(12.dp))
 
+                // Camera Button - FIXED
                 Button(
                     onClick = {
-                        val permission = Manifest.permission.CAMERA
-                        if (ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) {
-                            // Permission already granted
-                            try {
-                                val file = createImageFile(context)
-                                currentPhotoPath = file.absolutePath
-                                val photoURI: Uri = FileProvider.getUriForFile(
-                                    context,
-                                    "${context.packageName}.provider",
-                                    file
-                                )
-                                cameraLauncher.launch(photoURI)
-                            } catch (e: Exception) {
-                                e.printStackTrace()
-                            }
-                        } else {
-                            // Request permission
-                            permissionLauncher.launch(permission)
-                        }
+                        openCamera()
                     },
                     modifier = Modifier.fillMaxWidth(),
                     enabled = idPelanggan.isNotEmpty() && namaPelanggan.isNotEmpty()
                 ) {
                     Icon(Icons.Default.CameraAlt, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text(if (fotoPath == null) "Ambil Foto Dokumentasi" else "Ambil Foto Baru")
+                    Text(if (fotoPath == null) "Ambil Foto *" else "Ganti Foto")
                 }
                 
                 if (fotoPath != null) {
                     Spacer(Modifier.height(8.dp))
-                    Text(
-                        "✓ Foto sudah diambil",
-                        fontSize = 12.sp,
-                        color = Color.Green,
-                        fontWeight = FontWeight.Medium
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "✓ Foto sudah diambil",
+                            fontSize = 12.sp,
+                            color = Color.Green,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            File(fotoPath!!).name,
+                            fontSize = 10.sp,
+                            color = Color.Gray,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
         }
@@ -752,7 +1001,6 @@ fun InputDataScreen(viewModel: KwhViewModel) {
 
         Spacer(Modifier.height(16.dp))
 
-        // Main Content based on mode
         if (mode == 1) {
             Mode1Screen(
                 blinkCount = blinkCount,
@@ -794,7 +1042,6 @@ fun InputDataScreen(viewModel: KwhViewModel) {
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Reset Button
             OutlinedButton(
                 onClick = { viewModel.resetForm() },
                 modifier = Modifier.weight(1f),
@@ -805,16 +1052,25 @@ fun InputDataScreen(viewModel: KwhViewModel) {
                 Text("Reset Form")
             }
             
-            // Save Button
             Button(
-                onClick = { viewModel.saveRiwayat() },
+                onClick = {
+                    if (isFormValidForSave) {
+                        viewModel.saveRiwayat()
+                        showSaveSuccess = true
+                    } else {
+                        showSaveError = true
+                    }
+                },
                 enabled = isFormValidForSave,
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(8.dp)
             ) {
-                Icon(Icons.Default.Save, contentDescription = null)
+                Icon(
+                    if (currentRiwayatId != null) Icons.Default.Edit else Icons.Default.Save,
+                    contentDescription = null
+                )
                 Spacer(Modifier.width(8.dp))
-                Text(if (viewModel.currentRiwayatId.value != null) "Update" else "Simpan")
+                Text(if (currentRiwayatId != null) "Update" else "Simpan Data")
             }
         }
 
@@ -827,62 +1083,46 @@ fun InputDataScreen(viewModel: KwhViewModel) {
             shape = RoundedCornerShape(12.dp)
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    "Rumus Perhitungan",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp,
-                    color = Color(0xFF333333)
-                )
-                Spacer(Modifier.height(8.dp))
-                
-                if (mode == 1) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
-                        "• P1 = (3600 × n/T) ÷ 1600",
+                        "Info Penyimpanan",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        color = Color(0xFF333333)
+                    )
+                    
+                    val riwayatCount by viewModel.riwayatList.collectAsState()
+                    Text(
+                        "${riwayatCount.size} data tersimpan",
                         fontSize = 12.sp,
-                        color = Color(0xFF6C757D)
-                    )
-                    Text(
-                        "   n = jumlah kedipan yang dipilih",
-                        fontSize = 11.sp,
-                        color = Color(0xFF6C757D),
-                        modifier = Modifier.padding(start = 8.dp)
-                    )
-                    Text(
-                        "   T = waktu kedipan ke-n (detik)",
-                        fontSize = 11.sp,
-                        color = Color(0xFF6C757D),
-                        modifier = Modifier.padding(start = 8.dp)
-                    )
-                    Text(
-                        "• P2 = (220 × Arus × 0.85) ÷ 1000",
-                        fontSize = 12.sp,
-                        color = Color(0xFF6C757D)
-                    )
-                } else {
-                    Text(
-                        "• P1 = Input langsung (kW)",
-                        fontSize = 12.sp,
-                        color = Color(0xFF6C757D)
-                    )
-                    Text(
-                        "• P2 = Phase R + Phase S + Phase T",
-                        fontSize = 12.sp,
-                        color = Color(0xFF6C757D)
+                        color = Color(0xFF0D6EFD),
+                        fontWeight = FontWeight.Medium
                     )
                 }
                 
+                Spacer(Modifier.height(8.dp))
+                
                 Text(
-                    "• Error = ((P1 - P2) ÷ P2) × 100%",
+                    "• Data disimpan menggunakan SharedPreferences",
                     fontSize = 12.sp,
                     color = Color(0xFF6C757D)
                 )
                 Text(
-                    "• Status: |Error| ≤ Kelas Meter → DALAM KELAS",
+                    "• Tidak hilang saat aplikasi ditutup",
                     fontSize = 12.sp,
                     color = Color(0xFF6C757D)
                 )
                 Text(
-                    "• Kelas Meter: 1.0%, 0.5%, atau 0.2%",
+                    "• Akses cepat dan tanpa internet",
+                    fontSize = 12.sp,
+                    color = Color(0xFF6C757D)
+                )
+                Text(
+                    "• Private: hanya tersimpan di device ini",
                     fontSize = 12.sp,
                     color = Color(0xFF6C757D)
                 )
@@ -892,8 +1132,9 @@ fun InputDataScreen(viewModel: KwhViewModel) {
 }
 
 @Composable
-fun RiwayatScreen(viewModel: KwhViewModel) {
+fun RiwayatScreen(viewModel: KwhViewModel, onNavigateToInput: () -> Unit) {
     val riwayatList by viewModel.riwayatList.collectAsState()
+    var showDeleteAllDialog by remember { mutableStateOf(false) }
     
     Column(
         modifier = Modifier
@@ -923,7 +1164,7 @@ fun RiwayatScreen(viewModel: KwhViewModel) {
                         fontSize = 20.sp
                     )
                     Text(
-                        "Total: ${riwayatList.size} data",
+                        "Data tersimpan lokal permanen",
                         color = Color.White.copy(alpha = 0.8f),
                         fontSize = 12.sp
                     )
@@ -931,11 +1172,11 @@ fun RiwayatScreen(viewModel: KwhViewModel) {
                 
                 if (riwayatList.isNotEmpty()) {
                     IconButton(
-                        onClick = { viewModel.clearRiwayat() },
+                        onClick = { showDeleteAllDialog = true },
                         modifier = Modifier.size(40.dp)
                     ) {
                         Icon(
-                            Icons.Default.Delete,
+                            Icons.Default.DeleteSweep,
                             contentDescription = "Hapus Semua",
                             tint = Color.White
                         )
@@ -959,13 +1200,13 @@ fun RiwayatScreen(viewModel: KwhViewModel) {
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     Icon(
-                        Icons.Default.History,
-                        contentDescription = "Riwayat Kosong",
+                        Icons.Default.Storage,
+                        contentDescription = "Kosong",
                         modifier = Modifier.size(80.dp),
                         tint = Color(0xFF6C757D)
                     )
                     Text(
-                        "Belum ada riwayat perhitungan",
+                        "Belum ada data",
                         fontSize = 16.sp,
                         color = Color(0xFF6C757D)
                     )
@@ -975,9 +1216,57 @@ fun RiwayatScreen(viewModel: KwhViewModel) {
                         color = Color(0xFF6C757D),
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
+                    Button(
+                        onClick = onNavigateToInput,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0D6EFD))
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = "Tambah Data")
+                        Spacer(Modifier.width(8.dp))
+                        Text("Tambah Data Baru")
+                    }
                 }
             }
         } else {
+            // Database stats
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFE7F1FF)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            "Statistik",
+                            fontSize = 12.sp,
+                            color = Color(0xFF0D6EFD),
+                            fontWeight = FontWeight.Medium
+                        )
+                        val mode1Count = riwayatList.count { it.mode == 1 }
+                        val mode2Count = riwayatList.count { it.mode == 2 }
+                        Text(
+                            "1 Phase: $mode1Count | 3 Phase: $mode2Count",
+                            fontSize = 11.sp,
+                            color = Color(0xFF0D6EFD)
+                        )
+                    }
+                    
+                    Text(
+                        "Total: ${riwayatList.size}",
+                        fontSize = 14.sp,
+                        color = Color(0xFF0D6EFD),
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+            
+            Spacer(Modifier.height(16.dp))
+            
             // Riwayat list
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -986,12 +1275,39 @@ fun RiwayatScreen(viewModel: KwhViewModel) {
                 items(riwayatList.sortedByDescending { it.timestamp }) { riwayat ->
                     RiwayatItem(
                         riwayat = riwayat,
-                        onEdit = { viewModel.loadRiwayat(riwayat) },
+                        onEdit = { 
+                            viewModel.loadRiwayat(riwayat.id)
+                            onNavigateToInput()
+                        },
                         onDelete = { viewModel.deleteRiwayat(riwayat.id) }
                     )
                 }
             }
         }
+    }
+    
+    if (showDeleteAllDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteAllDialog = false },
+            title = { Text("Hapus Semua Data") },
+            text = { Text("Apakah Anda yakin ingin menghapus semua data? Tindakan ini tidak dapat dibatalkan.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.clearRiwayat()
+                        showDeleteAllDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC3545))
+                ) {
+                    Text("Hapus Semua")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteAllDialog = false }) {
+                    Text("Batal")
+                }
+            }
+        )
     }
 }
 
@@ -1003,12 +1319,11 @@ fun RiwayatItem(
 ) {
     var showDeleteDialog by remember { mutableStateOf(false) }
     
-    // Delete confirmation dialog
     if (showDeleteDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
-            title = { Text("Hapus Riwayat") },
-            text = { Text("Apakah Anda yakin ingin menghapus riwayat ini?") },
+            title = { Text("Hapus Data") },
+            text = { Text("Apakah Anda yakin ingin menghapus data ini?") },
             confirmButton = {
                 Button(
                     onClick = {
@@ -1043,14 +1358,14 @@ fun RiwayatItem(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        "${riwayat.pelangganData.nama} - ${riwayat.pelangganData.idPelanggan}",
+                        "${riwayat.pelangganData.nama} (${riwayat.pelangganData.idPelanggan})",
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp,
                         color = Color(0xFF333333)
                     )
                     Text(
                         formatTimestamp(riwayat.timestamp),
-                        fontSize = 12.sp,
+                        fontSize = 11.sp,
                         color = Color(0xFF6C757D)
                     )
                     Text(
@@ -1061,7 +1376,6 @@ fun RiwayatItem(
                     )
                 }
                 
-                // Action buttons
                 Row {
                     IconButton(
                         onClick = onEdit,
@@ -1090,10 +1404,19 @@ fun RiwayatItem(
             
             // Alamat
             Text(
-                "Alamat: ${riwayat.pelangganData.alamat}",
+                "📍 ${riwayat.pelangganData.alamat}",
                 fontSize = 12.sp,
                 color = Color(0xFF6C757D)
             )
+            
+            if (riwayat.pelangganData.fotoPath.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "📷 Foto: ${File(riwayat.pelangganData.fotoPath).name}",
+                    fontSize = 11.sp,
+                    color = Color(0xFF6C757D)
+                )
+            }
             
             Spacer(Modifier.height(12.dp))
             
@@ -1191,20 +1514,34 @@ fun RiwayatItem(
                     fontSize = 11.sp,
                     color = Color(0xFF6C757D)
                 )
+                Text(
+                    "• Kelas Meter: ${riwayat.inputData.classMeter}%",
+                    fontSize = 11.sp,
+                    color = Color(0xFF6C757D)
+                )
             } else {
                 Text(
                     "• P1: ${riwayat.inputData.p1Input}kW | R:${riwayat.inputData.phaseR} S:${riwayat.inputData.phaseS} T:${riwayat.inputData.phaseT}",
                     fontSize = 11.sp,
                     color = Color(0xFF6C757D)
                 )
+                Text(
+                    "• Kelas Meter: ${riwayat.inputData.classMeter}%",
+                    fontSize = 11.sp,
+                    color = Color(0xFF6C757D)
+                )
             }
+            
+            // ID
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "ID: ${riwayat.id.take(8)}...",
+                fontSize = 10.sp,
+                color = Color(0xFF999999)
+            )
         }
     }
 }
-
-// ================= REMAINING COMPOSABLE FUNCTIONS (Mode1Screen, Mode2Screen, etc.) =================
-// [Mode1Screen, Mode2Screen, ResultBox, PhaseInputField, PhaseResultBox, BlinkRecordItem]
-// These functions remain exactly the same as in the previous version
 
 @Composable
 fun Mode1Screen(

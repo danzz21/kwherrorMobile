@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<full-backup-content>
-    <!-- Backup shared preferences -->
-    <include domain="sharedpref" path="."/>
-    
-    <!-- Exclude files that might contain sensitive information -->
-    <exclude domain="file" path="no_backup/"/>
-    <exclude domain="database" path="sensitive.db"/>
-</full-backup-content>
