@@ -89,6 +89,12 @@ implementation ("com.google.code.gson:gson:2.10.1")
     implementation("androidx.lifecycle:lifecycle-livedata-ktx:2.7.0")
     implementation("androidx.compose.runtime:runtime-livedata")
 
+ // Untuk PDF generation
+    implementation ("com.itextpdf:itext7-core:7.2.5")
+    implementation ("com.itextpdf:html2pdf:4.0.5")
+    
+    // Untuk share file
+    implementation ("androidx.core:core-ktx:1.12.0")
     // ===== CORE =====
     implementation("androidx.core:core-ktx:1.12.0")
 
