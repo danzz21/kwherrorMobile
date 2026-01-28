@@ -16,6 +16,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -33,9 +34,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -112,6 +115,16 @@ data class RiwayatData(
     val calculationResult: CalculationResult
 )
 
+// NEW: Data untuk informasi pengguna (register data)
+data class UserInfo(
+    val id: String = UUID.randomUUID().toString(),
+    val namaLengkap: String = "",
+    val nip: String = "",
+    val namaPerusahaan: String = "",
+    val kedudukanPerusahaan: String = "", // Contoh: PLN UID/UP3/ULP
+    val createdAt: Long = System.currentTimeMillis()
+)
+
 // ================= UTILITY FUNCTIONS =================
 fun formatTimestamp(timestamp: Long): String {
     val sdf = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault())
@@ -142,8 +155,7 @@ fun getModeColor(mode: Int): Color {
     return Color(0xFFFF9800)
 }
 
-@Composable
-fun getModeIcon(mode: Int): androidx.compose.ui.graphics.vector.ImageVector {
+fun getModeIcon(mode: Int): ImageVector {
     return when (mode) {
         1 -> Icons.Default.Bolt
         2 -> Icons.Default.ElectricBolt
@@ -156,8 +168,11 @@ fun getModeIcon(mode: Int): androidx.compose.ui.graphics.vector.ImageVector {
 // ================= SIMPLE STORAGE MANAGER =================
 object SimpleStorageManager {
     private const val RIWAYAT_LIST_KEY = "riwayat_list"
+    private const val USER_INFO_KEY = "user_info"
+    private const val IS_FIRST_TIME_KEY = "is_first_time"
     private val gson = Gson()
     
+    // ===== RIWAYAT OPERATIONS =====
     fun saveRiwayat(context: Context, riwayat: RiwayatData) {
         val sharedPref = context.getSharedPreferences("kwh_storage", Context.MODE_PRIVATE)
         val currentList = getRiwayatList(context).toMutableList()
@@ -200,10 +215,72 @@ object SimpleStorageManager {
         val sharedPref = context.getSharedPreferences("kwh_storage", Context.MODE_PRIVATE)
         sharedPref.edit().remove(RIWAYAT_LIST_KEY).apply()
     }
+    
+    // ===== USER INFO OPERATIONS =====
+    fun saveUserInfo(context: Context, userInfo: UserInfo) {
+        val sharedPref = context.getSharedPreferences("kwh_storage", Context.MODE_PRIVATE)
+        val json = gson.toJson(userInfo)
+        sharedPref.edit().putString(USER_INFO_KEY, json).apply()
+        // Set bahwa user sudah register
+        setIsFirstTime(context, false)
+    }
+    
+    fun getUserInfo(context: Context): UserInfo? {
+        val sharedPref = context.getSharedPreferences("kwh_storage", Context.MODE_PRIVATE)
+        val json = sharedPref.getString(USER_INFO_KEY, null) ?: return null
+        return try {
+            gson.fromJson(json, UserInfo::class.java)
+        } catch (e: Exception) {
+            null
+        }
+    }
+    
+    fun updateUserInfo(context: Context, userInfo: UserInfo): Boolean {
+        return try {
+            saveUserInfo(context, userInfo)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+    
+    fun clearUserInfo(context: Context) {
+        val sharedPref = context.getSharedPreferences("kwh_storage", Context.MODE_PRIVATE)
+        sharedPref.edit().remove(USER_INFO_KEY).apply()
+        setIsFirstTime(context, true)
+    }
+    
+    // ===== FIRST TIME CHECK =====
+    fun isFirstTime(context: Context): Boolean {
+        val sharedPref = context.getSharedPreferences("kwh_storage", Context.MODE_PRIVATE)
+        return sharedPref.getBoolean(IS_FIRST_TIME_KEY, true)
+    }
+    
+    private fun setIsFirstTime(context: Context, isFirstTime: Boolean) {
+        val sharedPref = context.getSharedPreferences("kwh_storage", Context.MODE_PRIVATE)
+        sharedPref.edit().putBoolean(IS_FIRST_TIME_KEY, isFirstTime).apply()
+    }
 }
 
 // ================= VIEWMODEL =================
 class KwhViewModel(application: Application) : AndroidViewModel(application) {
+    
+    // User info states
+    private val _userInfo = MutableStateFlow<UserInfo?>(null)
+    val userInfo: StateFlow<UserInfo?> = _userInfo.asStateFlow()
+    
+    // Register states
+    private val _namaLengkap = MutableStateFlow("")
+    val namaLengkap: StateFlow<String> = _namaLengkap.asStateFlow()
+    
+    private val _nip = MutableStateFlow("")
+    val nip: StateFlow<String> = _nip.asStateFlow()
+    
+    private val _namaPerusahaan = MutableStateFlow("")
+    val namaPerusahaan: StateFlow<String> = _namaPerusahaan.asStateFlow()
+    
+    private val _kedudukanPerusahaan = MutableStateFlow("")
+    val kedudukanPerusahaan: StateFlow<String> = _kedudukanPerusahaan.asStateFlow()
     
     // Mode: 1 = Impulse Meter vs V×I×Cosφ, 2 = Display Meter vs Tang kW, 3 = Impulse Meter vs Tang kW, 4 = Display Meter vs V×I×Cosφ
     private val _mode = MutableStateFlow(1)
@@ -279,16 +356,109 @@ class KwhViewModel(application: Application) : AndroidViewModel(application) {
     private val _currentRiwayatId = MutableStateFlow<String?>(null)
     val currentRiwayatId: StateFlow<String?> = _currentRiwayatId.asStateFlow()
     
+    // Check if user needs to register
+    private val _needsRegistration = MutableStateFlow(false)
+    val needsRegistration: StateFlow<Boolean> = _needsRegistration.asStateFlow()
+    
     init {
-        loadRiwayatFromStorage()
+        loadInitialData()
     }
     
-    // Load data dari storage
-    private fun loadRiwayatFromStorage() {
+    private fun loadInitialData() {
         viewModelScope.launch {
             val context = getApplication<Application>()
-            val list = SimpleStorageManager.getRiwayatList(context)
-            _riwayatList.value = list
+            
+            // Check if user has registered
+            val user = SimpleStorageManager.getUserInfo(context)
+            _userInfo.value = user
+            _needsRegistration.value = (user == null)
+            
+            // Load riwayat
+            _riwayatList.value = SimpleStorageManager.getRiwayatList(context)
+        }
+    }
+    
+    // ===== USER REGISTRATION METHODS =====
+    fun setNamaLengkap(value: String) { _namaLengkap.value = value }
+    fun setNip(value: String) { _nip.value = value }
+    fun setNamaPerusahaan(value: String) { _namaPerusahaan.value = value }
+    fun setKedudukanPerusahaan(value: String) { _kedudukanPerusahaan.value = value }
+    
+    fun register() {
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            
+            // Validasi
+            if (_namaLengkap.value.isEmpty()) {
+                Toast.makeText(context, "Nama Lengkap harus diisi", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            
+            if (_nip.value.isEmpty()) {
+                Toast.makeText(context, "NIP harus diisi", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            
+            if (_namaPerusahaan.value.isEmpty()) {
+                Toast.makeText(context, "Nama Perusahaan harus diisi", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            
+            if (_kedudukanPerusahaan.value.isEmpty()) {
+                Toast.makeText(context, "Kedudukan Perusahaan harus diisi", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            
+            val newUserInfo = UserInfo(
+                namaLengkap = _namaLengkap.value,
+                nip = _nip.value,
+                namaPerusahaan = _namaPerusahaan.value,
+                kedudukanPerusahaan = _kedudukanPerusahaan.value
+            )
+            
+            SimpleStorageManager.saveUserInfo(context, newUserInfo)
+            _userInfo.value = newUserInfo
+            _needsRegistration.value = false
+            
+            // Reset form
+            _namaLengkap.value = ""
+            _nip.value = ""
+            _namaPerusahaan.value = ""
+            _kedudukanPerusahaan.value = ""
+            
+            Toast.makeText(context, "Registrasi berhasil!", Toast.LENGTH_SHORT).show()
+        }
+    }
+    
+    fun updateUserInfo() {
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            val currentUser = _userInfo.value ?: return@launch
+            
+            val updatedUser = currentUser.copy(
+                namaLengkap = _namaLengkap.value,
+                nip = _nip.value,
+                namaPerusahaan = _namaPerusahaan.value,
+                kedudukanPerusahaan = _kedudukanPerusahaan.value
+            )
+            
+            val success = SimpleStorageManager.updateUserInfo(context, updatedUser)
+            if (success) {
+                _userInfo.value = updatedUser
+                Toast.makeText(context, "Profil berhasil diperbarui", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, "Gagal memperbarui profil", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+    
+    fun logout() {
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            SimpleStorageManager.clearUserInfo(context)
+            _userInfo.value = null
+            _needsRegistration.value = true
+            Toast.makeText(context, "Data pengguna dihapus", Toast.LENGTH_SHORT).show()
         }
     }
     
@@ -478,6 +648,14 @@ class KwhViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     
+    private fun loadRiwayatFromStorage() {
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            val list = SimpleStorageManager.getRiwayatList(context)
+            _riwayatList.value = list
+        }
+    }
+    
     fun loadRiwayat(id: String) {
         viewModelScope.launch {
             val context = getApplication<Application>()
@@ -578,12 +756,11 @@ class KwhViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     
-    fun isValidClassMeter(value: String): Boolean {
-        val validValues = listOf("1.0", "0.5", "0.2")
-        return value in validValues
+    fun isFormValidForSave(): Boolean {
+        return isCalculationValid()
     }
     
-    fun isCalculationValid(): Boolean {
+    private fun isCalculationValid(): Boolean {
         return when (_mode.value) {
             1 -> _selectedBlinkIndex.value != null && 
                   _arus.value.isNotEmpty() && 
@@ -622,10 +799,6 @@ class KwhViewModel(application: Application) : AndroidViewModel(application) {
             else -> false
         }
     }
-    
-    fun isFormValidForSave(): Boolean {
-        return isCalculationValid()
-    }
 }
 
 // ================= UTILITY FUNCTIONS =================
@@ -650,23 +823,19 @@ fun createImageFile(context: Context): File? {
     }
 }
 
-fun isValidClassMeter(value: String): Boolean {
-    val validValues = listOf("1.0", "0.5", "0.2")
-    return value in validValues
-}
-
 // ================= PDF EXPORTER (REAL PDF) =================
 object PdfExporter {
     
     fun exportRiwayatToPdf(
         context: Context,
         riwayat: RiwayatData,
+        userInfo: UserInfo? = null,
         onSuccess: (Uri) -> Unit,
         onError: (String) -> Unit
     ) {
         try {
             val pdfFile = createPdfFile(context, riwayat)
-            createPdfDocument(context, riwayat, pdfFile)
+            createPdfDocument(context, riwayat, pdfFile, userInfo)
             
             val uri = FileProvider.getUriForFile(
                 context,
@@ -680,379 +849,6 @@ object PdfExporter {
             e.printStackTrace()
             onError("Gagal membuat PDF: ${e.message}")
         }
-    }
-    
-    private fun createPdfDocument(context: Context, riwayat: RiwayatData, pdfFile: File) {
-        val document = PdfDocument()
-        
-        // Buat halaman A4 (595 x 842 points)
-        val pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create()
-        val page = document.startPage(pageInfo)
-        val canvas = page.canvas
-        val paint = android.graphics.Paint()
-        
-        // Warna
-        val colorOrange = android.graphics.Color.parseColor("#FF9800")
-        val colorBlue = android.graphics.Color.parseColor("#0D6EFD")
-        val colorGreen = android.graphics.Color.parseColor("#198754")
-        val colorRed = android.graphics.Color.parseColor("#DC3545")
-        val colorGray = android.graphics.Color.parseColor("#6C757D")
-        val colorDark = android.graphics.Color.parseColor("#333333")
-        
-        var yPos = 50f // Posisi Y awal
-        
-        // ===== HEADER =====
-        paint.color = colorOrange
-        paint.textSize = 20f
-        paint.isFakeBoldText = true
-        canvas.drawText("LAPORAN PENGUJIAN KWH METER", 50f, yPos, paint)
-        yPos += 30f
-        
-        paint.color = colorDark
-        paint.textSize = 12f
-        paint.isFakeBoldText = false
-        canvas.drawText(getModeText(riwayat.mode), 50f, yPos, paint)
-        yPos += 20f
-        
-        canvas.drawText("Tanggal: ${formatTimestamp(riwayat.timestamp)} | No. Laporan: ${riwayat.id.take(8).uppercase()}", 50f, yPos, paint)
-        yPos += 40f
-        
-        // Garis pemisah
-        paint.color = colorOrange
-        paint.strokeWidth = 3f
-        canvas.drawLine(50f, yPos - 10f, 545f, yPos - 10f, paint)
-        yPos += 20f
-        
-        // ===== DUA KOLOM UTAMA =====
-        val columnWidth = 240f
-        val columnGap = 30f
-        
-        // KOLOM KIRI
-        var xPos = 50f
-        
-        // 1. DATA PELANGGAN
-        drawSectionTitle(canvas, xPos, yPos, "1. DATA PELANGGAN")
-        yPos += 25f
-        
-        paint.color = colorDark
-        paint.textSize = 10f
-        canvas.drawText("Nama:", xPos, yPos, paint)
-        canvas.drawText(": ${riwayat.pelangganData.nama.ifEmpty { "-" }}", xPos + 60f, yPos, paint)
-        yPos += 20f
-        
-        canvas.drawText("ID Pelanggan:", xPos, yPos, paint)
-        canvas.drawText(": ${riwayat.pelangganData.idPelanggan.ifEmpty { "-" }}", xPos + 60f, yPos, paint)
-        yPos += 20f
-        
-        canvas.drawText("Alamat:", xPos, yPos, paint)
-        canvas.drawText(": ${riwayat.pelangganData.alamat.ifEmpty { "-" }}", xPos + 60f, yPos, paint)
-        yPos += 30f
-        
-        if (riwayat.pelangganData.fotoPath.isNotEmpty()) {
-            paint.color = colorBlue
-            canvas.drawText("📷 Foto: ${File(riwayat.pelangganData.fotoPath).name}", xPos, yPos, paint)
-            yPos += 20f
-        }
-        
-        // 2. PARAMETER PENGUJIAN
-        drawSectionTitle(canvas, xPos, yPos, "2. PARAMETER PENGUJIAN")
-        yPos += 25f
-        
-        drawParameterRow(canvas, xPos, yPos, "Kelas Meter", "${riwayat.calculationResult.kelasMeter}%")
-        yPos += 20f
-        drawParameterRow(canvas, xPos, yPos, "Tegangan (V)", "${riwayat.inputData.voltage} V")
-        yPos += 20f
-        drawParameterRow(canvas, xPos, yPos, "Cos φ", riwayat.inputData.cosphi)
-        yPos += 20f
-        drawParameterRow(canvas, xPos, yPos, "Konstanta", "${riwayat.inputData.konstanta} imp/kWh")
-        yPos += 20f
-        drawParameterRow(canvas, xPos, yPos, "Mode", getModeShortText(riwayat.mode))
-        yPos += 40f
-        
-        // 3. SUMBER PERHITUNGAN
-        drawSectionTitle(canvas, xPos, yPos, "3. SUMBER PERHITUNGAN")
-        yPos += 25f
-        
-        // Box sumber perhitungan
-        paint.color = android.graphics.Color.parseColor("#F8F9FA")
-        paint.style = android.graphics.Paint.Style.FILL
-        canvas.drawRect(xPos, yPos, xPos + columnWidth, yPos + 60f, paint)
-        
-        paint.color = colorOrange
-        paint.style = android.graphics.Paint.Style.STROKE
-        paint.strokeWidth = 2f
-        canvas.drawRect(xPos, yPos, xPos + columnWidth, yPos + 60f, paint)
-        
-        paint.style = android.graphics.Paint.Style.FILL
-        paint.color = colorDark
-        paint.textSize = 10f
-        canvas.drawText("P1: ${riwayat.calculationResult.p1Source}", xPos + 10f, yPos + 20f, paint)
-        paint.color = colorBlue
-        paint.textSize = 14f
-        paint.isFakeBoldText = true
-        canvas.drawText("${String.format("%.3f", riwayat.calculationResult.p1)} kW", xPos + 150f, yPos + 20f, paint)
-        
-        paint.color = colorDark
-        paint.textSize = 10f
-        paint.isFakeBoldText = false
-        canvas.drawText("P2: ${riwayat.calculationResult.p2Source}", xPos + 10f, yPos + 45f, paint)
-        paint.color = colorGreen
-        paint.textSize = 14f
-        paint.isFakeBoldText = true
-        canvas.drawText("${String.format("%.3f", riwayat.calculationResult.p2)} kW", xPos + 150f, yPos + 45f, paint)
-        
-        // KOLOM KANAN
-        yPos = 165f // Reset Y untuk kolom kanan
-        xPos = 50f + columnWidth + columnGap
-        
-        // 4. DATA INPUT
-        drawSectionTitle(canvas, xPos, yPos, "4. DATA INPUT")
-        yPos += 25f
-        
-        // Tampilkan data input berdasarkan mode
-        when (riwayat.mode) {
-            1 -> {
-                drawInputRow(canvas, xPos, yPos, "Arus (I)", "${riwayat.inputData.arus} A")
-                yPos += 20f
-                drawInputRow(canvas, xPos, yPos, "Tegangan (V)", "${riwayat.inputData.voltage} V")
-                yPos += 20f
-                drawInputRow(canvas, xPos, yPos, "Cos φ", riwayat.inputData.cosphi)
-                yPos += 20f
-                drawInputRow(canvas, xPos, yPos, "Konstanta", "${riwayat.inputData.konstanta} imp/kWh")
-                yPos += 20f
-                drawInputRow(canvas, xPos, yPos, "Jumlah Kedipan", "${riwayat.inputData.blinkCount} kali")
-                yPos += 20f
-                drawInputRow(canvas, xPos, yPos, "Waktu", "${String.format("%.2f", riwayat.inputData.elapsedTime/1000.0)} detik")
-            }
-            2 -> {
-                drawInputRow(canvas, xPos, yPos, "P1 Display", "${riwayat.inputData.p1Input} kW")
-                yPos += 20f
-                drawInputRow(canvas, xPos, yPos, "Phase R", "${riwayat.inputData.phaseR} kW")
-                yPos += 20f
-                drawInputRow(canvas, xPos, yPos, "Phase S", "${riwayat.inputData.phaseS} kW")
-                yPos += 20f
-                drawInputRow(canvas, xPos, yPos, "Phase T", "${riwayat.inputData.phaseT} kW")
-                yPos += 20f
-                drawInputRow(canvas, xPos, yPos, "Total P2", "${String.format("%.3f", riwayat.calculationResult.p2)} kW")
-            }
-            3 -> {
-                drawInputRow(canvas, xPos, yPos, "Konstanta", "${riwayat.inputData.konstanta} imp/kWh")
-                yPos += 20f
-                drawInputRow(canvas, xPos, yPos, "Jumlah Kedipan", "${riwayat.inputData.blinkCount} kali")
-                yPos += 20f
-                drawInputRow(canvas, xPos, yPos, "Waktu", "${String.format("%.2f", riwayat.inputData.elapsedTime/1000.0)} detik")
-                yPos += 20f
-                drawInputRow(canvas, xPos, yPos, "Phase R", "${riwayat.inputData.phaseR} kW")
-                yPos += 20f
-                drawInputRow(canvas, xPos, yPos, "Phase S", "${riwayat.inputData.phaseS} kW")
-                yPos += 20f
-                drawInputRow(canvas, xPos, yPos, "Phase T", "${riwayat.inputData.phaseT} kW")
-            }
-            4 -> {
-                drawInputRow(canvas, xPos, yPos, "P1 Display", "${riwayat.inputData.p1Input} kW")
-                yPos += 20f
-                drawInputRow(canvas, xPos, yPos, "Arus (I)", "${riwayat.inputData.arus} A")
-                yPos += 20f
-                drawInputRow(canvas, xPos, yPos, "Tegangan (V)", "${riwayat.inputData.voltage} V")
-                yPos += 20f
-                drawInputRow(canvas, xPos, yPos, "Cos φ", riwayat.inputData.cosphi)
-            }
-        }
-        
-        yPos += 40f
-        
-        // 5. HASIL PENGUKURAN
-        drawSectionTitle(canvas, xPos, yPos, "5. HASIL PENGUKURAN")
-        yPos += 25f
-        
-        // Box ERROR
-        paint.color = android.graphics.Color.parseColor("#E7F3FF")
-        paint.style = android.graphics.Paint.Style.FILL
-        canvas.drawRect(xPos, yPos, xPos + 110f, yPos + 50f, paint)
-        
-        paint.color = if (Math.abs(riwayat.calculationResult.error) <= riwayat.calculationResult.kelasMeter) colorGreen else colorRed
-        paint.style = android.graphics.Paint.Style.STROKE
-        paint.strokeWidth = 1f
-        canvas.drawRect(xPos, yPos, xPos + 110f, yPos + 50f, paint)
-        
-        paint.style = android.graphics.Paint.Style.FILL
-        paint.color = colorDark
-        paint.textSize = 9f
-        canvas.drawText("ERROR", xPos + 40f, yPos + 15f, paint)
-        
-        paint.color = if (Math.abs(riwayat.calculationResult.error) <= riwayat.calculationResult.kelasMeter) colorGreen else colorRed
-        paint.textSize = 16f
-        paint.isFakeBoldText = true
-        canvas.drawText("${String.format("%.2f", riwayat.calculationResult.error)}%", xPos + 40f, yPos + 35f, paint)
-        
-        // Box KELAS
-        paint.color = android.graphics.Color.parseColor("#F8F9FA")
-        paint.style = android.graphics.Paint.Style.FILL
-        canvas.drawRect(xPos + 130f, yPos, xPos + 240f, yPos + 50f, paint)
-        
-        paint.color = colorGray
-        paint.style = android.graphics.Paint.Style.STROKE
-        canvas.drawRect(xPos + 130f, yPos, xPos + 240f, yPos + 50f, paint)
-        
-        paint.style = android.graphics.Paint.Style.FILL
-        paint.color = colorDark
-        paint.textSize = 9f
-        paint.isFakeBoldText = false
-        canvas.drawText("BATAS KELAS", xPos + 165f, yPos + 15f, paint)
-        
-        paint.color = colorGray
-        paint.textSize = 16f
-        paint.isFakeBoldText = true
-        canvas.drawText("±${riwayat.calculationResult.kelasMeter}%", xPos + 165f, yPos + 35f, paint)
-        
-        yPos += 70f
-        
-        // Rumus ERROR
-        paint.color = android.graphics.Color.parseColor("#FFF3CD")
-        paint.style = android.graphics.Paint.Style.FILL
-        canvas.drawRect(xPos, yPos, xPos + columnWidth, yPos + 40f, paint)
-        
-        paint.color = colorDark
-        paint.textSize = 9f
-        paint.isFakeBoldText = true
-        canvas.drawText("ERROR (%) = [(P1 - P2) ÷ P2] × 100%", xPos + 10f, yPos + 15f, paint)
-        canvas.drawText("= [(${String.format("%.3f", riwayat.calculationResult.p1)} - ${String.format("%.3f", riwayat.calculationResult.p2)})", xPos + 10f, yPos + 30f, paint)
-        
-        yPos += 60f
-        
-        // 6. KESIMPULAN
-        drawSectionTitle(canvas, xPos, yPos, "6. KESIMPULAN")
-        yPos += 25f
-        
-        // Status box
-        val statusColor = if (riwayat.calculationResult.status == "DI DALAM KELAS METER") 
-            android.graphics.Color.parseColor("#D4EDDA") 
-        else 
-            android.graphics.Color.parseColor("#F8D7DA")
-        
-        val statusTextColor = if (riwayat.calculationResult.status == "DI DALAM KELAS METER")
-            android.graphics.Color.parseColor("#155724")
-        else
-            android.graphics.Color.parseColor("#721C24")
-        
-        paint.color = statusColor
-        paint.style = android.graphics.Paint.Style.FILL
-        canvas.drawRect(xPos, yPos, xPos + columnWidth, yPos + 60f, paint)
-        
-        paint.color = if (riwayat.calculationResult.status == "DI DALAM KELAS METER") 
-            android.graphics.Color.parseColor("#C3E6CB") 
-        else 
-            android.graphics.Color.parseColor("#F5C6CB")
-        paint.style = android.graphics.Paint.Style.STROKE
-        paint.strokeWidth = 2f
-        canvas.drawRect(xPos, yPos, xPos + columnWidth, yPos + 60f, paint)
-        
-        paint.style = android.graphics.Paint.Style.FILL
-        paint.color = statusTextColor
-        paint.textSize = 14f
-        paint.isFakeBoldText = true
-        canvas.drawText(riwayat.calculationResult.status, xPos + (columnWidth/2) - 80f, yPos + 25f, paint)
-        
-        paint.textSize = 10f
-        paint.isFakeBoldText = false
-        val statusMsg = if (riwayat.calculationResult.status == "DI DALAM KELAS METER")
-            "✓ Meter memenuhi standar akurasi"
-        else
-            "✗ Meter tidak memenuhi standar akurasi"
-        canvas.drawText(statusMsg, xPos + (columnWidth/2) - 90f, yPos + 45f, paint)
-        
-        yPos += 90f
-        
-        // ===== TANDA TANGAN =====
-        drawSectionTitle(canvas, 50f, yPos, "7. TANDA TANGAN PELAKSANA")
-        yPos += 30f
-        
-        // Garis pemisah
-        paint.color = colorDark
-        paint.strokeWidth = 1f
-        canvas.drawLine(50f, yPos - 10f, 545f, yPos - 10f, paint)
-        yPos += 20f
-        
-        // Kolom kiri: Pelaksana
-        paint.color = colorDark
-        paint.textSize = 10f
-        canvas.drawText("Pelaksana Pengujian", 150f, yPos, paint)
-        yPos += 20f
-        
-        // Garis tanda tangan
-        paint.strokeWidth = 1f
-        canvas.drawLine(150f, yPos, 350f, yPos, paint)
-        yPos += 20f
-        
-        canvas.drawText("(.................................)", 150f, yPos, paint)
-        yPos += 20f
-        canvas.drawText("NIP. ........................", 150f, yPos, paint)
-        
-        // Kolom kanan: Pengawas
-        yPos -= 60f // Reset untuk kolom kanan
-        canvas.drawText("Mengetahui,", 350f, yPos, paint)
-        yPos += 15f
-        canvas.drawText("Pengawas Teknis", 350f, yPos, paint)
-        yPos += 20f
-        
-        canvas.drawLine(350f, yPos, 550f, yPos, paint)
-        yPos += 20f
-        
-        canvas.drawText("(.................................)", 350f, yPos, paint)
-        yPos += 20f
-        canvas.drawText("NIP. ........................", 350f, yPos, paint)
-        
-        yPos += 40f
-        
-        // ===== FOOTER =====
-        paint.color = colorGray
-        paint.textSize = 8f
-        canvas.drawText("Laporan ini dihasilkan secara otomatis oleh aplikasi KWH Meter Test", 50f, yPos, paint)
-        yPos += 15f
-        
-        canvas.drawText("ID: ${riwayat.id} | Valid hingga: ${SimpleDateFormat("dd/MM/yyyy", Locale.getDefault()).format(Date(riwayat.timestamp + 30L * 24 * 60 * 60 * 1000))}", 50f, yPos, paint)
-        yPos += 15f
-        
-        canvas.drawText("Cetak pada: ${formatTimestamp(System.currentTimeMillis())}", 50f, yPos, paint)
-        
-        // Selesaikan halaman dan simpan
-        document.finishPage(page)
-        
-        // Tulis ke file
-        val fos = FileOutputStream(pdfFile)
-        document.writeTo(fos)
-        document.close()
-        fos.close()
-    }
-    
-    private fun drawSectionTitle(canvas: android.graphics.Canvas, x: Float, y: Float, title: String) {
-        val paint = android.graphics.Paint()
-        paint.color = android.graphics.Color.parseColor("#FF9800")
-        paint.style = android.graphics.Paint.Style.FILL
-        paint.textSize = 11f
-        paint.isFakeBoldText = true
-        canvas.drawText(title, x, y, paint)
-    }
-    
-    private fun drawParameterRow(canvas: android.graphics.Canvas, x: Float, y: Float, label: String, value: String) {
-        val paint = android.graphics.Paint()
-        paint.color = android.graphics.Color.parseColor("#333333")
-        paint.textSize = 10f
-        canvas.drawText(label, x, y, paint)
-        paint.isFakeBoldText = true
-        canvas.drawText(value, x + 150f, y, paint)
-        paint.isFakeBoldText = false
-    }
-    
-    private fun drawInputRow(canvas: android.graphics.Canvas, x: Float, y: Float, label: String, value: String) {
-        val paint = android.graphics.Paint()
-        paint.color = android.graphics.Color.parseColor("#333333")
-        paint.textSize = 10f
-        canvas.drawText(label, x, y, paint)
-        paint.color = android.graphics.Color.parseColor("#0D6EFD")
-        paint.isFakeBoldText = true
-        canvas.drawText(value, x + 100f, y, paint)
-        paint.isFakeBoldText = false
     }
     
     private fun createPdfFile(context: Context, riwayat: RiwayatData): File {
@@ -1105,6 +901,505 @@ object PdfExporter {
             Toast.makeText(context, "Gagal membagikan PDF: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
+    
+    private fun createPdfDocument(context: Context, riwayat: RiwayatData, pdfFile: File, userInfo: UserInfo?) {
+        val document = PdfDocument()
+        
+        // Buat halaman A4 (595 x 842 points)
+        val pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create()
+        val page = document.startPage(pageInfo)
+        val canvas = page.canvas
+        val paint = android.graphics.Paint()
+        
+        // Warna modern
+        val colorPrimary = android.graphics.Color.parseColor("#2E7D32") // Hijau PLN
+        val colorSecondary = android.graphics.Color.parseColor("#FF9800") // Oranye
+        val colorAccent = android.graphics.Color.parseColor("#1976D2") // Biru
+        val colorSuccess = android.graphics.Color.parseColor("#4CAF50") // Hijau sukses
+        val colorError = android.graphics.Color.parseColor("#F44336") // Merah error
+        val colorText = android.graphics.Color.parseColor("#424242") // Text grey
+        val colorLight = android.graphics.Color.parseColor("#F5F5F5") // Light grey
+        
+        // Fungsi helper untuk warna dengan alpha
+        fun colorWithAlpha(color: Int, alpha: Int): Int {
+            return android.graphics.Color.argb(
+                alpha,
+                android.graphics.Color.red(color),
+                android.graphics.Color.green(color),
+                android.graphics.Color.blue(color)
+            )
+        }
+        
+        // Background halaman
+        paint.color = android.graphics.Color.WHITE
+        paint.style = android.graphics.Paint.Style.FILL
+        canvas.drawRect(0f, 0f, 595f, 842f, paint)
+        
+        // ===== HEADER UTAMA DI TENGAH =====
+        paint.color = colorPrimary
+        paint.textSize = 18f
+        paint.isFakeBoldText = true
+        val headerText1 = "LAPORAN PENGUKURAN ERROR kWh METER"
+        val header1Width = paint.measureText(headerText1)
+        canvas.drawText(headerText1, (595f - header1Width) / 2, 40f, paint)
+        
+        paint.color = colorSecondary
+        paint.textSize = 14f
+        val headerText2 = "PLN UP3 PONDOK GEDE"
+        val header2Width = paint.measureText(headerText2)
+        canvas.drawText(headerText2, (595f - header2Width) / 2, 65f, paint)
+        
+        // Garis header di tengah
+        paint.color = colorPrimary
+        paint.strokeWidth = 2f
+        val lineStart = (595f - 400f) / 2
+        val lineEnd = lineStart + 400f
+        canvas.drawLine(lineStart, 75f, lineEnd, 75f, paint)
+        
+        paint.color = colorSecondary
+        paint.strokeWidth = 1f
+        canvas.drawLine(lineStart, 78f, lineEnd, 78f, paint)
+        
+        var yPos = 95f // Ditambah untuk lebih longgar
+        val columnWidth = 240f
+        val columnGap = 35f // Ditambah gap antar kolom
+        
+        // ===== KOLOM KIRI =====
+        var currentY = yPos
+        var xPos = 40f // Dikurangi dari 50f untuk margin kiri lebih besar
+        
+        // CARD 1: DATA PELANGGAN (Kiri Atas)
+        drawModernCard(canvas, xPos, currentY, columnWidth, 120f, "DATA PELANGGAN", colorPrimary)
+        currentY += 28f // Spasi judul ke konten ditambah
+        
+        paint.color = colorText
+        paint.textSize = 11f
+        paint.isFakeBoldText = false
+        
+        // Nama pelanggan dengan padding lebih
+        canvas.drawText("Nama", xPos + 20f, currentY, paint)
+        paint.isFakeBoldText = true
+        canvas.drawText(": ${riwayat.pelangganData.nama.ifEmpty { "-" }}", xPos + 85f, currentY, paint)
+        currentY += 24f // Spasi antar baris ditambah
+        
+        // ID pelanggan
+        paint.isFakeBoldText = false
+        canvas.drawText("ID Pelanggan", xPos + 20f, currentY, paint)
+        paint.isFakeBoldText = true
+        canvas.drawText(": ${riwayat.pelangganData.idPelanggan.ifEmpty { "-" }}", xPos + 85f, currentY, paint)
+        currentY += 24f
+        
+        // Kelas meter
+        paint.isFakeBoldText = false
+        canvas.drawText("Kelas Meter", xPos + 20f, currentY, paint)
+        paint.color = colorPrimary
+        paint.isFakeBoldText = true
+        canvas.drawText(": ${riwayat.calculationResult.kelasMeter}%", xPos + 85f, currentY, paint)
+        paint.color = colorText
+        
+        currentY += 55f // Spasi antar card lebih besar
+        
+        // CARD 2: PERHITUNGAN ENERGI (Kiri Tengah)
+        drawModernCard(canvas, xPos, currentY, columnWidth, 110f, "PERHITUNGAN ENERGI", colorSecondary)
+        currentY += 28f // Spasi judul ke konten ditambah
+        
+        // P1 dengan styling
+        paint.color = colorText
+        paint.isFakeBoldText = false
+        canvas.drawText("P1", xPos + 20f, currentY, paint)
+        paint.color = colorAccent
+        paint.isFakeBoldText = true
+        paint.textSize = 13f
+        canvas.drawText("= ${String.format("%.3f", riwayat.calculationResult.p1)} kW", xPos + 75f, currentY, paint)
+        
+        currentY += 28f // Spasi antar baris ditambah
+        
+        // P2 dengan styling
+        paint.color = colorText
+        paint.isFakeBoldText = false
+        paint.textSize = 11f
+        canvas.drawText("P2", xPos + 20f, currentY, paint)
+        paint.color = colorSuccess
+        paint.isFakeBoldText = true
+        paint.textSize = 13f
+        canvas.drawText("= ${String.format("%.3f", riwayat.calculationResult.p2)} kW", xPos + 75f, currentY, paint)
+        
+        currentY += 55f // Spasi antar card lebih besar
+        
+        // CARD 3: PARAMETER PENGUKURAN (Kiri Bawah)
+        drawModernCard(canvas, xPos, currentY, columnWidth, 190f, "PARAMETER PENGUKURAN", colorAccent)
+        currentY += 28f // Spasi judul ke konten ditambah
+        
+        paint.color = colorText
+        paint.textSize = 10.5f
+        paint.isFakeBoldText = false
+        
+        val params = listOf(
+            "Tegangan" to "${riwayat.inputData.voltage} V",
+            "Arus" to "${if (riwayat.inputData.arus.isNotEmpty()) riwayat.inputData.arus else "0.0"} A",
+            "Cosphi" to riwayat.inputData.cosphi,
+            "Imp/kWh" to riwayat.inputData.konstanta,
+            "Putaran" to "${riwayat.inputData.blinkCount} kali",
+            "Waktu" to "${String.format("%.2f", riwayat.inputData.elapsedTime / 1000.0)} detik"
+        )
+        
+        params.forEachIndexed { index, (label, value) ->
+            canvas.drawText(label, xPos + 20f, currentY, paint)
+            paint.color = colorPrimary
+            paint.isFakeBoldText = true
+            canvas.drawText(": $value", xPos + 95f, currentY, paint)
+            paint.color = colorText
+            paint.isFakeBoldText = false
+            currentY += 22f // Spasi antar baris ditambah
+        }
+        
+        // ===== KOLOM KANAN =====
+        currentY = yPos
+        xPos = 40f + columnWidth + columnGap // Disesuaikan dengan margin baru
+        
+        // CARD 4: HASIL PERHITUNGAN (Kanan Atas)
+        drawModernCard(canvas, xPos, currentY, columnWidth, 140f, "HASIL PERHITUNGAN", colorPrimary)
+        currentY += 28f // Spasi judul ke konten ditambah
+        
+        paint.color = colorText
+        paint.textSize = 10.5f
+        paint.isFakeBoldText = false
+        
+        // Rumus error sederhana
+        canvas.drawText("Rumus Error:", xPos + 20f, currentY, paint)
+        currentY += 20f
+        
+        paint.color = colorText
+        paint.textSize = 10f
+        paint.isFakeBoldText = true
+        canvas.drawText("Error = [(P1 - P2) ÷ P2] × 100%", xPos + 25f, currentY, paint)
+        
+        currentY += 28f
+        
+        // Persen error
+        paint.color = colorText
+        paint.textSize = 10.5f
+        paint.isFakeBoldText = false
+        canvas.drawText("Persen Error:", xPos + 20f, currentY, paint)
+        
+        val errorValue = riwayat.calculationResult.error
+        val errorColor = if (Math.abs(errorValue) <= riwayat.calculationResult.kelasMeter) 
+            colorSuccess else colorError
+        
+        // Badge untuk persen error
+        paint.color = colorWithAlpha(errorColor, 51) // alpha 20%
+        paint.style = android.graphics.Paint.Style.FILL
+        val errorText = "${String.format("%.2f", errorValue)}%"
+        val errorTextWidth = paint.measureText(errorText)
+        canvas.drawRoundRect(
+            xPos + 100f, currentY - 12f,
+            xPos + 100f + errorTextWidth + 25f, currentY + 8f,
+            8f, 8f, paint
+        )
+        
+        paint.color = errorColor
+        paint.textSize = 14f
+        paint.isFakeBoldText = true
+        canvas.drawText(errorText, xPos + 113f, currentY, paint)
+        
+        currentY += 32f
+        
+        // Status
+        paint.color = colorText
+        paint.textSize = 10.5f
+        paint.isFakeBoldText = false
+        canvas.drawText("Status Error:", xPos + 20f, currentY, paint)
+        
+        val status = riwayat.calculationResult.status
+        val statusColor = if (status == "DI DALAM KELAS METER") colorSuccess else colorError
+        
+        // Badge untuk status
+        paint.color = colorWithAlpha(statusColor, 51) // alpha 20%
+        paint.style = android.graphics.Paint.Style.FILL
+        val statusTextWidth = paint.measureText(status)
+        canvas.drawRoundRect(
+            xPos + 90f, currentY - 12f,
+            xPos + 90f + statusTextWidth + 25f, currentY + 8f,
+            8f, 8f, paint
+        )
+        
+        paint.color = statusColor
+        paint.textSize = 12f
+        paint.isFakeBoldText = true
+        canvas.drawText(status, xPos + 103f, currentY, paint)
+        
+        currentY += 65f // Spasi antar card lebih besar
+        
+        // CARD 5: DOKUMENTASI (Kanan Tengah) - FOTO SAJA, TANPA TEKS
+        val fotoCardHeight = if (riwayat.pelangganData.fotoPath.isNotEmpty()) 210f else 110f
+        drawModernCard(canvas, xPos, currentY, columnWidth, fotoCardHeight, "DOKUMENTASI", colorSecondary)
+        currentY += 28f // Spasi judul ke konten ditambah
+        
+        if (riwayat.pelangganData.fotoPath.isNotEmpty()) {
+            try {
+                // Load dan tampilkan foto
+                val file = File(riwayat.pelangganData.fotoPath)
+                if (file.exists()) {
+                    // Decode dengan ukuran yang sesuai
+                    val options = android.graphics.BitmapFactory.Options()
+                    options.inJustDecodeBounds = true
+                    android.graphics.BitmapFactory.decodeFile(file.absolutePath, options)
+                    
+                    // Hitung scaling - ukuran maksimal untuk card
+                    val maxWidth = columnWidth - 60f // Lebih kecil untuk padding lebih
+                    val maxHeight = 150f // Tinggi maksimal
+                    val imageWidth = options.outWidth
+                    val imageHeight = options.outHeight
+                    
+                    val widthScale = maxWidth / imageWidth
+                    val heightScale = maxHeight / imageHeight
+                    val scale = kotlin.math.min(widthScale, heightScale)
+                    
+                    val targetWidth = imageWidth * scale
+                    val targetHeight = imageHeight * scale
+                    
+                    // Decode dengan ukuran yang sudah di-scale
+                    options.inJustDecodeBounds = false
+                    options.inSampleSize = calculateInSampleSize(options, targetWidth.toInt(), targetHeight.toInt())
+                    
+                    val bitmap = android.graphics.BitmapFactory.decodeFile(file.absolutePath, options)
+                    if (bitmap != null) {
+                        // Resize bitmap
+                        val finalBitmap = android.graphics.Bitmap.createScaledBitmap(
+                            bitmap, 
+                            targetWidth.toInt(), 
+                            targetHeight.toInt(), 
+                            true
+                        )
+                        
+                        // Hitung posisi tengah
+                        val imageX = xPos + (columnWidth - targetWidth) / 2
+                        val imageY = currentY + 10f // Tambah padding atas
+                        
+                        // Shadow effect
+                        paint.color = android.graphics.Color.parseColor("#20000000")
+                        paint.style = android.graphics.Paint.Style.FILL
+                        canvas.drawRoundRect(
+                            imageX - 3f, imageY - 3f,
+                            imageX + targetWidth + 3f, 
+                            imageY + targetHeight + 3f,
+                            8f, 8f, paint
+                        )
+                        
+                        // Draw foto
+                        canvas.drawBitmap(finalBitmap, imageX, imageY, paint)
+                        
+                        // Border foto
+                        paint.color = colorAccent
+                        paint.style = android.graphics.Paint.Style.STROKE
+                        paint.strokeWidth = 2f
+                        canvas.drawRoundRect(
+                            imageX, imageY,
+                            imageX + targetWidth,
+                            imageY + targetHeight,
+                            5f, 5f, paint
+                        )
+                    } else {
+                        paint.color = colorError
+                        paint.textSize = 10f
+                        canvas.drawText("❌ Foto tidak dapat dimuat", xPos + 20f, currentY + 30f, paint)
+                    }
+                } else {
+                    paint.color = colorSecondary
+                    paint.textSize = 11f
+                    canvas.drawText("⚠️ File foto tidak tersedia", xPos + 20f, currentY + 40f, paint)
+                }
+            } catch (e: Exception) {
+                paint.color = colorError
+                paint.textSize = 10f
+                canvas.drawText("⚠️ Error memuat foto", xPos + 20f, currentY + 30f, paint)
+            }
+        } else {
+            paint.color = colorText
+            paint.textSize = 11f
+            val cameraIcon = "📷"
+            val cameraWidth = paint.measureText(cameraIcon)
+            canvas.drawText(
+                cameraIcon, 
+                xPos + (columnWidth - cameraWidth) / 2, 
+                currentY + 40f, 
+                paint
+            )
+            
+            paint.color = colorText
+            paint.textSize = 10f
+            val noFotoText = "Tidak ada foto"
+            canvas.drawText(
+                noFotoText, 
+                xPos + (columnWidth - paint.measureText(noFotoText)) / 2, 
+                currentY + 70f, 
+                paint
+            )
+        }
+        
+        currentY += 85f // Spasi antar card lebih besar
+        
+        // CARD 6: PELAKSANA (Kanan Bawah) - Menggunakan data dari UserInfo
+        drawModernCard(canvas, xPos, currentY, columnWidth, 130f, "PELAKSANA", colorAccent)
+        currentY += 28f // Spasi judul ke konten ditambah
+        
+        paint.color = colorText
+        paint.textSize = 10.5f
+        paint.isFakeBoldText = false
+        
+        // Nama dari UserInfo
+        val namaPelaksana = userInfo?.namaLengkap ?: "__________________"
+        canvas.drawText("Nama", xPos + 20f, currentY, paint)
+        paint.color = colorPrimary
+        paint.isFakeBoldText = true
+        canvas.drawText(": $namaPelaksana", xPos + 80f, currentY, paint)
+        paint.color = colorText
+        paint.isFakeBoldText = false
+        currentY += 28f // Spasi antar baris ditambah
+        
+        // NIP dari UserInfo
+        val nipPelaksana = userInfo?.nip ?: "__________________"
+        canvas.drawText("NIP", xPos + 20f, currentY, paint)
+        paint.color = colorPrimary
+        paint.isFakeBoldText = true
+        canvas.drawText(": $nipPelaksana", xPos + 80f, currentY, paint)
+        paint.color = colorText
+        paint.isFakeBoldText = false
+        currentY += 28f
+        
+        // Kedudukan dari UserInfo
+        val kedudukan = userInfo?.kedudukanPerusahaan ?: "Petugas Pelaksana"
+        canvas.drawText("Kedudukan", xPos + 20f, currentY, paint)
+        paint.color = colorPrimary
+        paint.isFakeBoldText = true
+        canvas.drawText(": $kedudukan", xPos + 80f, currentY, paint)
+        
+        // ===== FOOTER =====
+        paint.color = colorLight
+        paint.style = android.graphics.Paint.Style.FILL
+        canvas.drawRect(0f, 820f, 595f, 842f, paint)
+        
+        paint.color = colorPrimary
+        paint.strokeWidth = 1f
+        canvas.drawLine(50f, 820f, 545f, 820f, paint)
+        
+        paint.color = colorText
+        paint.textSize = 8f
+        paint.isFakeBoldText = false
+        
+        val printTime = "Dicetak: ${formatTimestamp(System.currentTimeMillis())}"
+        canvas.drawText(printTime, 50f, 835f, paint)
+        
+        val pageText = "Halaman 1/1"
+        canvas.drawText(pageText, 297.5f - paint.measureText(pageText)/2, 835f, paint)
+        
+        val idText = "ID: ${riwayat.id.take(8).uppercase()}"
+        canvas.drawText(idText, 545f - paint.measureText(idText), 835f, paint)
+        
+        // Watermark
+        paint.color = colorWithAlpha(colorPrimary, 15)
+        paint.textSize = 80f
+        paint.isFakeBoldText = true
+        val watermark = "PLN"
+        val watermarkWidth = paint.measureText(watermark)
+        canvas.save()
+        canvas.rotate(-45f, 297.5f, 421f)
+        canvas.drawText(watermark, 297.5f - watermarkWidth/2, 421f, paint)
+        canvas.restore()
+        
+        // Selesaikan
+        document.finishPage(page)
+        
+        try {
+            val fos = FileOutputStream(pdfFile)
+            document.writeTo(fos)
+            document.close()
+            fos.close()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            throw e
+        }
+    }
+    
+    private fun calculateInSampleSize(options: android.graphics.BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int {
+        val (height: Int, width: Int) = options.run { outHeight to outWidth }
+        var inSampleSize = 1
+
+        if (height > reqHeight || width > reqWidth) {
+            val halfHeight: Int = height / 2
+            val halfWidth: Int = width / 2
+
+            while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
+                inSampleSize *= 2
+            }
+        }
+
+        return inSampleSize
+    }
+    
+    private fun drawModernCard(
+        canvas: android.graphics.Canvas,
+        x: Float,
+        y: Float,
+        width: Float,
+        height: Float,
+        title: String,
+        color: Int
+    ) {
+        val paint = android.graphics.Paint()
+        
+        // Shadow effect yang lebih lembut
+        paint.color = android.graphics.Color.parseColor("#08000000")
+        canvas.drawRoundRect(x + 2f, y + 2f, x + width + 2f, y + height + 2f, 12f, 12f, paint)
+        
+        // Card background dengan warna solid
+        paint.color = android.graphics.Color.WHITE
+        paint.style = android.graphics.Paint.Style.FILL
+        canvas.drawRoundRect(x, y, x + width, y + height, 12f, 12f, paint)
+        
+        // Border yang lebih halus
+        paint.color = android.graphics.Color.parseColor("#E8E8E8")
+        paint.style = android.graphics.Paint.Style.STROKE
+        paint.strokeWidth = 1.2f
+        canvas.drawRoundRect(x, y, x + width, y + height, 12f, 12f, paint)
+        
+        // Header dengan padding lebih
+        paint.color = color
+        paint.style = android.graphics.Paint.Style.FILL
+        canvas.drawRoundRect(x, y, x + width, y + 30f, 12f, 12f, paint)
+        
+        // Garis pemisah header-content
+        paint.color = android.graphics.Color.parseColor("#D0D0D0")
+        paint.strokeWidth = 0.8f
+        canvas.drawLine(x, y + 30f, x + width, y + 30f, paint)
+        
+        // Title dengan padding yang baik
+        paint.color = android.graphics.Color.WHITE
+        paint.style = android.graphics.Paint.Style.FILL
+        paint.textSize = 12f
+        paint.isFakeBoldText = true
+        val textWidth = paint.measureText(title)
+        canvas.drawText(title, x + (width - textWidth) / 2, y + 21f, paint)
+    }
+    
+    private fun drawDottedLine(canvas: android.graphics.Canvas, x: Float, y: Float, width: Float) {
+        val paint = android.graphics.Paint()
+        
+        // Garis input yang lebih rapi
+        paint.color = android.graphics.Color.parseColor("#CCCCCC")
+        paint.strokeWidth = 1f
+        canvas.drawLine(x, y + 10f, x + width, y + 10f, paint)
+        
+        // Titik-titik untuk garis isian
+        paint.color = android.graphics.Color.parseColor("#999999")
+        paint.textSize = 16f
+        var dotX = x + 5f
+        val dotCount = kotlin.math.min(20, (width / 10).toInt())
+        repeat(dotCount) {
+            canvas.drawText(".", dotX, y + 10f, paint)
+            dotX += 10f
+        }
+    }
 }
 
 // ================= MAIN ACTIVITY =================
@@ -1117,6 +1412,8 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// ================= MAIN APP =================
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun KwhMeterApp() {
     val context = LocalContext.current
@@ -1129,47 +1426,596 @@ fun KwhMeterApp() {
         }
     )
     
+    val needsRegistration by viewModel.needsRegistration.collectAsState()
+    val userInfo by viewModel.userInfo.collectAsState()
+    
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = Color(0xFFF5F5F5)
     ) {
-        MainScreen(viewModel)
+        if (needsRegistration) {
+            RegisterScreen(viewModel)
+        } else {
+            MainScreen(viewModel, userInfo)
+        }
     }
 }
 
-
+// ================= REGISTER SCREEN =================
 @Composable
-fun MainScreen(viewModel: KwhViewModel) {
-    var currentTab by remember { mutableStateOf(0) }
+fun RegisterScreen(viewModel: KwhViewModel) {
+    val namaLengkap by viewModel.namaLengkap.collectAsState()
+    val nip by viewModel.nip.collectAsState()
+    val namaPerusahaan by viewModel.namaPerusahaan.collectAsState()
+    val kedudukanPerusahaan by viewModel.kedudukanPerusahaan.collectAsState()
     
-    Column(modifier = Modifier.fillMaxSize()) {
-        TabRow(
-            selectedTabIndex = currentTab,
-            containerColor = Color(0xFF0D6EFD),
-            contentColor = Color.White
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Header
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 40.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Tab(
-                selected = currentTab == 0,
-                onClick = { currentTab = 0 },
-                text = { Text("Input Data", color = Color.White) }
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFFFF9800)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.ElectricBolt,
+                    contentDescription = "KWH Meter",
+                    tint = Color.White,
+                    modifier = Modifier.size(40.dp)
+                )
+            }
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "KWH Meter Test",
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF333333)
             )
-            Tab(
-                selected = currentTab == 1,
-                onClick = { currentTab = 1 },
-                text = { 
-                    val riwayatCount by viewModel.riwayatList.collectAsState()
-                    Text("Riwayat (${riwayatCount.size})", color = Color.White) 
-                }
+            Text(
+                "Pengujian Akurasi Meter Listrik - PLN",
+                fontSize = 14.sp,
+                color = Color(0xFF6C757D)
             )
         }
         
-        when (currentTab) {
-            0 -> InputDataScreen(viewModel, onNavigateToRiwayat = { currentTab = 1 })
-            1 -> RiwayatScreen(viewModel, onNavigateToInput = { currentTab = 0 })
+        // Information Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFE7F1FF)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    "Pendaftaran Wajib",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = Color(0xFF0D6EFD)
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Isi data diri Anda untuk menggunakan aplikasi KWH Meter Test. Data ini akan digunakan untuk laporan pengujian.",
+                    fontSize = 14.sp,
+                    color = Color(0xFF6C757D),
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+        
+        Spacer(Modifier.height(24.dp))
+        
+        // REGISTER FORM
+        RegisterForm(viewModel)
+        
+        Spacer(Modifier.height(24.dp))
+        
+        // Info Aplikasi
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F9FA)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    "Fitur Aplikasi",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    color = Color(0xFF333333)
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "• 4 Mode pengukuran akurasi kWh Meter",
+                    fontSize = 12.sp,
+                    color = Color(0xFF6C757D)
+                )
+                Text(
+                    "• Simpan data secara offline",
+                    fontSize = 12.sp,
+                    color = Color(0xFF6C757D)
+                )
+                Text(
+                    "• Export laporan PDF 2 kolom",
+                    fontSize = 12.sp,
+                    color = Color(0xFF6C757D)
+                )
+                Text(
+                    "• Data tersimpan di perangkat",
+                    fontSize = 12.sp,
+                    color = Color(0xFF6C757D)
+                )
+            }
         }
     }
 }
 
+@Composable
+fun RegisterForm(viewModel: KwhViewModel) {
+    val namaLengkap by viewModel.namaLengkap.collectAsState()
+    val nip by viewModel.nip.collectAsState()
+    val namaPerusahaan by viewModel.namaPerusahaan.collectAsState()
+    val kedudukanPerusahaan by viewModel.kedudukanPerusahaan.collectAsState()
+    
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                "Data Diri Pengguna",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF333333)
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Wajib diisi sebelum menggunakan aplikasi",
+                fontSize = 12.sp,
+                color = Color(0xFF6C757D)
+            )
+            Spacer(Modifier.height(16.dp))
+            
+            OutlinedTextField(
+                value = namaLengkap,
+                onValueChange = { viewModel.setNamaLengkap(it) },
+                label = { Text("Nama Lengkap *") },
+                modifier = Modifier.fillMaxWidth(),
+                leadingIcon = {
+                    Icon(Icons.Default.Person, contentDescription = null)
+                },
+                singleLine = true
+            )
+            
+            Spacer(Modifier.height(12.dp))
+            
+            OutlinedTextField(
+                value = nip,
+                onValueChange = { viewModel.setNip(it) },
+                label = { Text("NIP *") },
+                modifier = Modifier.fillMaxWidth(),
+                leadingIcon = {
+                    Icon(Icons.Default.Badge, contentDescription = null)
+                },
+                singleLine = true
+            )
+            
+            Spacer(Modifier.height(12.dp))
+            
+            OutlinedTextField(
+                value = namaPerusahaan,
+                onValueChange = { viewModel.setNamaPerusahaan(it) },
+                label = { Text("Nama Perusahaan *") },
+                modifier = Modifier.fillMaxWidth(),
+                leadingIcon = {
+                    Icon(Icons.Default.Business, contentDescription = null)
+                },
+                singleLine = true
+            )
+            
+            Spacer(Modifier.height(12.dp))
+            
+            OutlinedTextField(
+                value = kedudukanPerusahaan,
+                onValueChange = { viewModel.setKedudukanPerusahaan(it) },
+                label = { Text("Kedudukan Perusahaan *") },
+                modifier = Modifier.fillMaxWidth(),
+                leadingIcon = {
+                    Icon(Icons.Default.LocationOn, contentDescription = null)
+                },
+                placeholder = { Text("Contoh: PLN UID/UP3/ULP") },
+                singleLine = true
+            )
+            
+            Spacer(Modifier.height(24.dp))
+            
+            Button(
+                onClick = { viewModel.register() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFFF9800)
+                ),
+                enabled = namaLengkap.isNotEmpty() && nip.isNotEmpty() && 
+                         namaPerusahaan.isNotEmpty() && kedudukanPerusahaan.isNotEmpty()
+            ) {
+                Text("DAFTAR DAN GUNAKAN APLIKASI", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+// ================= MAIN SCREEN (Setelah Register) =================
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MainScreen(viewModel: KwhViewModel, userInfo: UserInfo?) {
+    var currentTab by remember { mutableStateOf(0) }
+    var showProfile by remember { mutableStateOf(false) }
+    
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text("KWH Meter Test")
+                        Text(
+                            "Pengguna: ${userInfo?.namaLengkap ?: "User"}",
+                            fontSize = 12.sp,
+                            color = Color.White.copy(alpha = 0.8f)
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color(0xFF0D6EFD),
+                    titleContentColor = Color.White
+                ),
+                actions = {
+                    // Profile button
+                    IconButton(
+                        onClick = { showProfile = true }
+                    ) {
+                        Icon(
+                            Icons.Default.AccountCircle,
+                            contentDescription = "Profile",
+                            tint = Color.White
+                        )
+                    }
+                    
+                    // Logout button
+                    IconButton(
+                        onClick = { viewModel.logout() }
+                    ) {
+                        Icon(
+                            Icons.Default.Logout,
+                            contentDescription = "Logout",
+                            tint = Color.White
+                        )
+                    }
+                }
+            )
+        }
+    ) { paddingValues ->
+        Column(modifier = Modifier.padding(paddingValues)) {
+            // Custom Tab Row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF0D6EFD))
+                    .height(48.dp)
+            ) {
+                // Tab 1: Input Data
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable { currentTab = 0 }
+                        .background(
+                            if (currentTab == 0) Color.White.copy(alpha = 0.2f) else Color.Transparent
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "Input Data",
+                        color = Color.White,
+                        fontWeight = if (currentTab == 0) FontWeight.Bold else FontWeight.Normal
+                    )
+                }
+                
+                // Tab 2: Riwayat
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable { currentTab = 1 }
+                        .background(
+                            if (currentTab == 1) Color.White.copy(alpha = 0.2f) else Color.Transparent
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val riwayatCount by viewModel.riwayatList.collectAsState()
+                    Text(
+                        "Riwayat (${riwayatCount.size})",
+                        color = Color.White,
+                        fontWeight = if (currentTab == 1) FontWeight.Bold else FontWeight.Normal
+                    )
+                }
+            }
+            
+            // Konten berdasarkan tab yang dipilih
+            when (currentTab) {
+                0 -> InputDataScreen(viewModel, onNavigateToRiwayat = { currentTab = 1 })
+                1 -> RiwayatScreen(viewModel, onNavigateToInput = { currentTab = 0 })
+            }
+        }
+        
+        // Profile Dialog
+        if (showProfile) {
+            ProfileDialog(
+                viewModel = viewModel,
+                userInfo = userInfo,
+                onDismiss = { showProfile = false }
+            )
+        }
+    }
+}
+
+// ================= PROFILE DIALOG =================
+@Composable
+fun ProfileDialog(
+    viewModel: KwhViewModel,
+    userInfo: UserInfo?,
+    onDismiss: () -> Unit
+) {
+    val namaLengkap by viewModel.namaLengkap.collectAsState()
+    val nip by viewModel.nip.collectAsState()
+    val namaPerusahaan by viewModel.namaPerusahaan.collectAsState()
+    val kedudukanPerusahaan by viewModel.kedudukanPerusahaan.collectAsState()
+    
+    var showLogoutDialog by remember { mutableStateOf(false) }
+    
+    LaunchedEffect(userInfo) {
+        if (userInfo != null) {
+            viewModel.setNamaLengkap(userInfo.namaLengkap)
+            viewModel.setNip(userInfo.nip)
+            viewModel.setNamaPerusahaan(userInfo.namaPerusahaan)
+            viewModel.setKedudukanPerusahaan(userInfo.kedudukanPerusahaan)
+        }
+    }
+    
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 600.dp),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Header
+                Box(
+                    modifier = Modifier
+                        .size(80.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFFFF9800)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.AccountCircle,
+                        contentDescription = "Profile",
+                        tint = Color.White,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+                
+                Spacer(Modifier.height(16.dp))
+                
+                Text(
+                    "Profil Pengguna",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF333333)
+                )
+                
+                Spacer(Modifier.height(8.dp))
+                
+                Badge(
+                    containerColor = Color(0xFF0D6EFD),
+                    contentColor = Color.White
+                ) {
+                    Text("PENGGUNA")
+                }
+                
+                Spacer(Modifier.height(24.dp))
+                
+                // User Info
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F9FA)),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        InfoRow(label = "Nama Lengkap", value = userInfo?.namaLengkap ?: "")
+                        Spacer(Modifier.height(8.dp))
+                        InfoRow(label = "NIP", value = userInfo?.nip ?: "")
+                        Spacer(Modifier.height(8.dp))
+                        InfoRow(label = "Perusahaan", value = userInfo?.namaPerusahaan ?: "")
+                        Spacer(Modifier.height(8.dp))
+                        InfoRow(label = "Kedudukan", value = userInfo?.kedudukanPerusahaan ?: "")
+                        Spacer(Modifier.height(8.dp))
+                        InfoRow(label = "Terdaftar", value = formatTimestamp(userInfo?.createdAt ?: 0))
+                    }
+                }
+                
+                Spacer(Modifier.height(24.dp))
+                
+                // Edit Profile Form
+                Text(
+                    "Edit Profil",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF333333),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                
+                Spacer(Modifier.height(12.dp))
+                
+                OutlinedTextField(
+                    value = namaLengkap,
+                    onValueChange = { viewModel.setNamaLengkap(it) },
+                    label = { Text("Nama Lengkap") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                
+                Spacer(Modifier.height(8.dp))
+                
+                OutlinedTextField(
+                    value = nip,
+                    onValueChange = { viewModel.setNip(it) },
+                    label = { Text("NIP") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                
+                Spacer(Modifier.height(8.dp))
+                
+                OutlinedTextField(
+                    value = namaPerusahaan,
+                    onValueChange = { viewModel.setNamaPerusahaan(it) },
+                    label = { Text("Nama Perusahaan") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                
+                Spacer(Modifier.height(8.dp))
+                
+                OutlinedTextField(
+                    value = kedudukanPerusahaan,
+                    onValueChange = { viewModel.setKedudukanPerusahaan(it) },
+                    label = { Text("Kedudukan Perusahaan") },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Contoh: PLN UID/UP3/ULP") }
+                )
+                
+                Spacer(Modifier.height(24.dp))
+                
+                // Action Buttons
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { showLogoutDialog = true },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = Color(0xFFDC3545)
+                        )
+                    ) {
+                        Text("Hapus Data")
+                    }
+                    
+                    Button(
+                        onClick = {
+                            viewModel.updateUserInfo()
+                            onDismiss()
+                        },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFFF9800)
+                        ),
+                        enabled = namaLengkap.isNotEmpty() && nip.isNotEmpty() && 
+                                 namaPerusahaan.isNotEmpty() && kedudukanPerusahaan.isNotEmpty()
+                    ) {
+                        Text("Simpan")
+                    }
+                }
+                
+                Spacer(Modifier.height(8.dp))
+                
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Tutup")
+                }
+            }
+        }
+    }
+    
+    // Logout Dialog
+    if (showLogoutDialog) {
+        AlertDialog(
+            onDismissRequest = { showLogoutDialog = false },
+            title = { Text("Hapus Data Pengguna") },
+            text = { 
+                Text("Apakah Anda yakin ingin menghapus data pengguna? Semua data riwayat pengujian akan tetap tersimpan.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.logout()
+                        showLogoutDialog = false
+                        onDismiss()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFDC3545)
+                    )
+                ) {
+                    Text("Hapus")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLogoutDialog = false }) {
+                    Text("Batal")
+                }
+            }
+        )
+    }
+}
+
+@Composable
+fun InfoRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            label,
+            fontSize = 12.sp,
+            color = Color(0xFF6C757D)
+        )
+        Text(
+            value,
+            fontSize = 12.sp,
+            color = Color(0xFF333333),
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+// ================= INPUT DATA SCREEN =================
 @Composable
 fun InputDataScreen(viewModel: KwhViewModel, onNavigateToRiwayat: () -> Unit) {
     val mode by viewModel.mode.collectAsState()
@@ -1195,8 +2041,9 @@ fun InputDataScreen(viewModel: KwhViewModel, onNavigateToRiwayat: () -> Unit) {
     val currentRiwayatId by viewModel.currentRiwayatId.collectAsState()
     
     val results = viewModel.calculateResults()
-    val isCalculationValid = viewModel.isCalculationValid()
-    val isFormValidForSave = viewModel.isFormValidForSave()
+    val isCalculationValid = remember(mode, selectedBlinkIndex, arus, voltage, cosphi, konstanta, p1Input, phaseR, phaseS, phaseT) {
+        viewModel.isFormValidForSave()
+    }
     
     var showSaveSuccess by remember { mutableStateOf(false) }
     
@@ -1582,8 +2429,8 @@ fun InputDataScreen(viewModel: KwhViewModel, onNavigateToRiwayat: () -> Unit) {
                 phaseR = phaseR,
                 phaseS = phaseS,
                 phaseT = phaseT,
-                blinkRecords = blinkRecords,
-                selectedBlinkIndex = selectedBlinkIndex,
+                blinkRecords = blinkRecords,  // Pastikan ini dikirimkan
+                selectedBlinkIndex = selectedBlinkIndex,  // Pastikan ini dikirimkan
                 results = results,
                 isCalculationValid = isCalculationValid,
                 onClassMeterChange = { viewModel.setClassMeter(it) },
@@ -1631,14 +2478,14 @@ fun InputDataScreen(viewModel: KwhViewModel, onNavigateToRiwayat: () -> Unit) {
             
             Button(
                 onClick = {
-                    if (isFormValidForSave) {
+                    if (isCalculationValid) {
                         viewModel.saveRiwayat()
                         showSaveSuccess = true
                     } else {
                         Toast.makeText(context, "Lengkapi data pengukuran terlebih dahulu", Toast.LENGTH_SHORT).show()
                     }
                 },
-                enabled = isFormValidForSave,
+                enabled = isCalculationValid,
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(8.dp),
                 colors = ButtonDefaults.buttonColors(
@@ -1730,145 +2577,49 @@ fun ModeSelectionCard(viewModel: KwhViewModel) {
             Spacer(Modifier.height(12.dp))
             
             // Mode 1
-            FilterChip(
-                selected = mode == 1,
-                onClick = { viewModel.setMode(1) },
-                label = { 
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalAlignment = Alignment.Start
-                    ) {
-                        Text(
-                            "MODE 1",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            "P1 = IMPULSE METER",
-                            fontSize = 11.sp,
-                            color = if (mode == 1) Color.White else Color(0xFF0D6EFD)
-                        )
-                        Text(
-                            "P2 = V × I × Cosφ (Tang kW)",
-                            fontSize = 11.sp,
-                            color = if (mode == 1) Color.White else Color(0xFF198754)
-                        )
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = Color(0xFFFF9800),
-                    selectedLabelColor = Color.White
-                )
+            ModeOption(
+                modeNumber = 1,
+                currentMode = mode,
+                title = "MODE 1",
+                p1Text = "P1 = IMPULSE METER",
+                p2Text = "P2 = V × I × Cosφ (Tang kW)",
+                onSelect = { viewModel.setMode(1) }
             )
             
             Spacer(Modifier.height(8.dp))
             
             // Mode 2
-            FilterChip(
-                selected = mode == 2,
-                onClick = { viewModel.setMode(2) },
-                label = { 
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalAlignment = Alignment.Start
-                    ) {
-                        Text(
-                            "MODE 2",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            "P1 = DISPLAY METER",
-                            fontSize = 11.sp,
-                            color = if (mode == 2) Color.White else Color(0xFF0D6EFD)
-                        )
-                        Text(
-                            "P2 = TANG kW",
-                            fontSize = 11.sp,
-                            color = if (mode == 2) Color.White else Color(0xFF198754)
-                        )
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = Color(0xFFFF9800),
-                    selectedLabelColor = Color.White
-                )
+            ModeOption(
+                modeNumber = 2,
+                currentMode = mode,
+                title = "MODE 2",
+                p1Text = "P1 = DISPLAY METER",
+                p2Text = "P2 = TANG kW",
+                onSelect = { viewModel.setMode(2) }
             )
             
             Spacer(Modifier.height(8.dp))
             
             // Mode 3
-            FilterChip(
-                selected = mode == 3,
-                onClick = { viewModel.setMode(3) },
-                label = { 
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalAlignment = Alignment.Start
-                    ) {
-                        Text(
-                            "MODE 3",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            "P1 = IMPULSE METER",
-                            fontSize = 11.sp,
-                            color = if (mode == 3) Color.White else Color(0xFF0D6EFD)
-                        )
-                        Text(
-                            "P2 = TANG kW",
-                            fontSize = 11.sp,
-                            color = if (mode == 3) Color.White else Color(0xFF198754)
-                        )
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = Color(0xFFFF9800),
-                    selectedLabelColor = Color.White
-                )
+            ModeOption(
+                modeNumber = 3,
+                currentMode = mode,
+                title = "MODE 3",
+                p1Text = "P1 = IMPULSE METER",
+                p2Text = "P2 = TANG kW",
+                onSelect = { viewModel.setMode(3) }
             )
             
             Spacer(Modifier.height(8.dp))
             
             // Mode 4
-            FilterChip(
-                selected = mode == 4,
-                onClick = { viewModel.setMode(4) },
-                label = { 
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalAlignment = Alignment.Start
-                    ) {
-                        Text(
-                            "MODE 4",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            "P1 = DISPLAY METER",
-                            fontSize = 11.sp,
-                            color = if (mode == 4) Color.White else Color(0xFF0D6EFD)
-                        )
-                        Text(
-                            "P2 = V × I × Cosφ (Tang kW)",
-                            fontSize = 11.sp,
-                            color = if (mode == 4) Color.White else Color(0xFF198754)
-                        )
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = Color(0xFFFF9800),
-                    selectedLabelColor = Color.White
-                )
+            ModeOption(
+                modeNumber = 4,
+                currentMode = mode,
+                title = "MODE 4",
+                p1Text = "P1 = DISPLAY METER",
+                p2Text = "P2 = V × I × Cosφ (Tang kW)",
+                onSelect = { viewModel.setMode(4) }
             )
             
             Spacer(Modifier.height(12.dp))
@@ -1903,8 +2654,812 @@ fun ModeSelectionCard(viewModel: KwhViewModel) {
 }
 
 @Composable
+fun ModeOption(
+    modeNumber: Int,
+    currentMode: Int,
+    title: String,
+    p1Text: String,
+    p2Text: String,
+    onSelect: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onSelect() },
+        colors = CardDefaults.cardColors(
+            containerColor = if (currentMode == modeNumber) Color(0xFFFF9800) else Color(0xFFF8F9FA)
+        ),
+        shape = RoundedCornerShape(8.dp),
+        border = if (currentMode == modeNumber) null else BorderStroke(1.dp, Color(0xFFE0E0E0))
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            horizontalAlignment = Alignment.Start
+        ) {
+            Text(
+                title,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+                color = if (currentMode == modeNumber) Color.White else Color(0xFF333333)
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                p1Text,
+                fontSize = 11.sp,
+                color = if (currentMode == modeNumber) Color.White.copy(alpha = 0.9f) else Color(0xFF0D6EFD)
+            )
+            Text(
+                p2Text,
+                fontSize = 11.sp,
+                color = if (currentMode == modeNumber) Color.White.copy(alpha = 0.9f) else Color(0xFF198754)
+            )
+        }
+    }
+}
+
+// ================= MODE SCREENS =================
+@Composable
+fun Mode1Screen(
+    blinkCount: Int,
+    elapsedTime: Long,
+    isCounting: Boolean,
+    arus: String,
+    classMeter: String,
+    voltage: String,
+    cosphi: String,
+    konstanta: String,
+    blinkRecords: List<BlinkRecord>,
+    selectedBlinkIndex: Int?,
+    results: CalculationResult,
+    isCalculationValid: Boolean,
+    onArusChange: (String) -> Unit,
+    onClassMeterChange: (String) -> Unit,
+    onVoltageChange: (String) -> Unit,
+    onCosphiChange: (String) -> Unit,
+    onKonstantaChange: (String) -> Unit,
+    onTimerToggle: () -> Unit,
+    onBlinkClick: () -> Unit,
+    onReset: () -> Unit,
+    onSelectBlink: (Int) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // P1 Input Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    "P1: Impulse Meter",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = Color(0xFF0D6EFD)
+                )
+                
+                Spacer(Modifier.height(16.dp))
+                
+                // Timer dan tombol
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("Waktu", fontSize = 12.sp, color = Color.Gray)
+                        Text(
+                            String.format("%.2f", elapsedTime / 1000.0) + " detik",
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF0D6EFD)
+                        )
+                    }
+                    
+                    Button(
+                        onClick = onTimerToggle,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isCounting) Color(0xFFDC3545) else Color(0xFF198754)
+                        )
+                    ) {
+                        Text(if (isCounting) "STOP" else "START")
+                    }
+                }
+                
+                Spacer(Modifier.height(16.dp))
+                
+                // Tombol impulse
+                Button(
+                    onClick = onBlinkClick,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(80.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF0D6EFD)
+                    ),
+                    enabled = isCounting || blinkCount == 0
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            "IMPULSE",
+                            fontSize = 14.sp,
+                            color = Color.White.copy(alpha = 0.8f)
+                        )
+                        Text(
+                            blinkCount.toString(),
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+                }
+                
+                Spacer(Modifier.height(16.dp))
+                
+                // Parameter
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = konstanta,
+                        onValueChange = onKonstantaChange,
+                        label = { Text("Konstanta") },
+                        modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    )
+                    OutlinedTextField(
+                        value = classMeter,
+                        onValueChange = onClassMeterChange,
+                        label = { Text("Kelas Meter") },
+                        modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    )
+                }
+                
+                if (blinkRecords.isNotEmpty()) {
+                    Spacer(Modifier.height(12.dp))
+                    Text("Pilih Rekaman Impulse:", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(8.dp))
+                    LazyColumn(modifier = Modifier.height(100.dp)) {
+                        items(blinkRecords) { record ->
+                            BlinkRecordItem(
+                                record = record,
+                                isSelected = selectedBlinkIndex == blinkRecords.indexOf(record),
+                                onClick = { onSelectBlink(blinkRecords.indexOf(record)) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        
+        // P2 Input Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    "P2: V × I × Cosφ",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = Color(0xFF198754)
+                )
+                
+                Spacer(Modifier.height(16.dp))
+                
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = arus,
+                        onValueChange = onArusChange,
+                        label = { Text("Arus (I)") },
+                        modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    )
+                    OutlinedTextField(
+                        value = voltage,
+                        onValueChange = onVoltageChange,
+                        label = { Text("Tegangan (V)") },
+                        modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    )
+                }
+                
+                Spacer(Modifier.height(8.dp))
+                
+                OutlinedTextField(
+                    value = cosphi,
+                    onValueChange = onCosphiChange,
+                    label = { Text("Cos φ") },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+            }
+        }
+        
+        // Results Card
+        ResultsCard(results, isCalculationValid, mode = 1)
+    }
+}
+
+@Composable
+fun Mode2Screen(
+    p1Input: String,
+    phaseR: String,
+    phaseS: String,
+    phaseT: String,
+    classMeter: String,
+    voltage: String,
+    cosphi: String,
+    konstanta: String,
+    results: CalculationResult,
+    isCalculationValid: Boolean,
+    onP1InputChange: (String) -> Unit,
+    onPhaseRChange: (String) -> Unit,
+    onPhaseSChange: (String) -> Unit,
+    onPhaseTChange: (String) -> Unit,
+    onClassMeterChange: (String) -> Unit,
+    onVoltageChange: (String) -> Unit,
+    onCosphiChange: (String) -> Unit,
+    onKonstantaChange: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // P1 Input Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    "P1: Display Meter",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = Color(0xFF0D6EFD)
+                )
+                
+                Spacer(Modifier.height(16.dp))
+                
+                OutlinedTextField(
+                    value = p1Input,
+                    onValueChange = onP1InputChange,
+                    label = { Text("P1 (kW) dari Display") },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+                
+                Spacer(Modifier.height(16.dp))
+                
+                OutlinedTextField(
+                    value = classMeter,
+                    onValueChange = onClassMeterChange,
+                    label = { Text("Kelas Meter (%)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+            }
+        }
+        
+        // P2 Input Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    "P2: Tang kW",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = Color(0xFF198754)
+                )
+                
+                Spacer(Modifier.height(16.dp))
+                
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = phaseR,
+                        onValueChange = onPhaseRChange,
+                        label = { Text("Phase R") },
+                        modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    )
+                    OutlinedTextField(
+                        value = phaseS,
+                        onValueChange = onPhaseSChange,
+                        label = { Text("Phase S") },
+                        modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    )
+                    OutlinedTextField(
+                        value = phaseT,
+                        onValueChange = onPhaseTChange,
+                        label = { Text("Phase T") },
+                        modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    )
+                }
+            }
+        }
+        
+        // Results Card
+        ResultsCard(results, isCalculationValid, mode = 2)
+    }
+}
+
+@Composable
+fun CombinedModeScreen(
+    mode: Int,
+    // Parameters for Mode 3
+    blinkCount: Int = 0,
+    elapsedTime: Long = 0,
+    isCounting: Boolean = false,
+    classMeter: String = "",
+    konstanta: String = "",
+    phaseR: String = "",
+    phaseS: String = "",
+    phaseT: String = "",
+    blinkRecords: List<BlinkRecord> = emptyList(),
+    selectedBlinkIndex: Int? = null,
+    // Parameters for Mode 4
+    p1Input: String = "",
+    arus: String = "",
+    voltage: String = "",
+    cosphi: String = "",
+    results: CalculationResult,
+    isCalculationValid: Boolean,
+    // Callbacks
+    onClassMeterChange: (String) -> Unit = {},
+    onKonstantaChange: (String) -> Unit = {},
+    onPhaseRChange: (String) -> Unit = {},
+    onPhaseSChange: (String) -> Unit = {},
+    onPhaseTChange: (String) -> Unit = {},
+    onTimerToggle: () -> Unit = {},
+    onBlinkClick: () -> Unit = {},
+    onReset: () -> Unit = {},
+    onSelectBlink: (Int) -> Unit = {},
+    onP1InputChange: (String) -> Unit = {},
+    onArusChange: (String) -> Unit = {},
+    onVoltageChange: (String) -> Unit = {},
+    onCosphiChange: (String) -> Unit = {}
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        if (mode == 3) {
+            // MODE 3 Components
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("P1: Impulse Meter", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF0D6EFD))
+                    
+                    Spacer(Modifier.height(16.dp))
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("Waktu", fontSize = 12.sp, color = Color.Gray)
+                            Text(
+                                String.format("%.2f", elapsedTime / 1000.0) + " detik",
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF0D6EFD)
+                            )
+                        }
+                        
+                        Button(
+                            onClick = onTimerToggle,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isCounting) Color(0xFFDC3545) else Color(0xFF198754)
+                            )
+                        ) {
+                            Text(if (isCounting) "STOP" else "START")
+                        }
+                    }
+                    
+                    Spacer(Modifier.height(16.dp))
+                    
+                    Button(
+                        onClick = onBlinkClick,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(80.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF0D6EFD)
+                        ),
+                        enabled = isCounting || blinkCount == 0
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text("IMPULSE", fontSize = 14.sp, color = Color.White.copy(alpha = 0.8f))
+                            Text(blinkCount.toString(), fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        }
+                    }
+                    
+                    Spacer(Modifier.height(16.dp))
+                    
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = konstanta,
+                            onValueChange = onKonstantaChange,
+                            label = { Text("Konstanta") },
+                            modifier = Modifier.weight(1f),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                        )
+                        OutlinedTextField(
+                            value = classMeter,
+                            onValueChange = onClassMeterChange,
+                            label = { Text("Kelas Meter") },
+                            modifier = Modifier.weight(1f),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                        )
+                    }
+                    
+                    // Tambahkan bagian untuk menampilkan rekaman impulse di mode 3
+                    if (blinkRecords.isNotEmpty()) {
+                        Spacer(Modifier.height(12.dp))
+                        Text("Pilih Rekaman Impulse:", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(8.dp))
+                        LazyColumn(modifier = Modifier.height(100.dp)) {
+                            items(blinkRecords) { record ->
+                                BlinkRecordItem(
+                                    record = record,
+                                    isSelected = selectedBlinkIndex == blinkRecords.indexOf(record),
+                                    onClick = { onSelectBlink(blinkRecords.indexOf(record)) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("P2: Tang kW", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF198754))
+                    
+                    Spacer(Modifier.height(16.dp))
+                    
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = phaseR,
+                            onValueChange = onPhaseRChange,
+                            label = { Text("Phase R") },
+                            modifier = Modifier.weight(1f),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                        )
+                        OutlinedTextField(
+                            value = phaseS,
+                            onValueChange = onPhaseSChange,
+                            label = { Text("Phase S") },
+                            modifier = Modifier.weight(1f),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                        )
+                        OutlinedTextField(
+                            value = phaseT,
+                            onValueChange = onPhaseTChange,
+                            label = { Text("Phase T") },
+                            modifier = Modifier.weight(1f),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                        )
+                    }
+                }
+            }
+        } else {
+            // MODE 4 Components
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("P1: Display Meter", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF0D6EFD))
+                    
+                    Spacer(Modifier.height(16.dp))
+                    
+                    OutlinedTextField(
+                        value = p1Input,
+                        onValueChange = onP1InputChange,
+                        label = { Text("P1 (kW) dari Display") },
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    )
+                }
+            }
+            
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("P2: V × I × Cosφ", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF198754))
+                    
+                    Spacer(Modifier.height(16.dp))
+                    
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = arus,
+                            onValueChange = onArusChange,
+                            label = { Text("Arus (I)") },
+                            modifier = Modifier.weight(1f),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                        )
+                        OutlinedTextField(
+                            value = voltage,
+                            onValueChange = onVoltageChange,
+                            label = { Text("Tegangan (V)") },
+                            modifier = Modifier.weight(1f),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                        )
+                    }
+                    
+                    Spacer(Modifier.height(8.dp))
+                    
+                    OutlinedTextField(
+                        value = cosphi,
+                        onValueChange = onCosphiChange,
+                        label = { Text("Cos φ") },
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    )
+                    
+                    Spacer(Modifier.height(16.dp))
+                    
+                    OutlinedTextField(
+                        value = classMeter,
+                        onValueChange = onClassMeterChange,
+                        label = { Text("Kelas Meter (%)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    )
+                }
+            }
+        }
+        
+        // Results Card
+        ResultsCard(results, isCalculationValid, mode)
+    }
+}
+
+@Composable
+fun ResultsCard(results: CalculationResult, isCalculationValid: Boolean, mode: Int) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                getModeText(mode),
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp
+            )
+            
+            Spacer(Modifier.height(16.dp))
+            
+            if (!isCalculationValid) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFFFFF3CD))
+                        .padding(16.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "Lengkapi semua input untuk melihat hasil",
+                        fontSize = 14.sp,
+                        color = Color(0xFF856404)
+                    )
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    ResultBox(
+                        title = "P1",
+                        value = String.format("%.3f", results.p1),
+                        unit = "kW",
+                        color = Color(0xFF0D6EFD),
+                        modifier = Modifier.weight(1f)
+                    )
+                    ResultBox(
+                        title = "P2",
+                        value = String.format("%.3f", results.p2),
+                        unit = "kW",
+                        color = Color(0xFF198754),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                
+                Spacer(Modifier.height(16.dp))
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    ResultBox(
+                        title = "ERROR",
+                        value = String.format("%.2f", results.error),
+                        unit = "%",
+                        color = if (Math.abs(results.error) <= results.kelasMeter) 
+                            Color(0xFF198754) 
+                        else Color(0xFFDC3545),
+                        modifier = Modifier.weight(1f)
+                    )
+                    ResultBox(
+                        title = "KELAS",
+                        value = String.format("%.1f", results.kelasMeter),
+                        unit = "%",
+                        color = Color(0xFF6C757D),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                
+                Spacer(Modifier.height(16.dp))
+                
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(
+                            color = if (results.status == "DI DALAM KELAS METER") 
+                                Color(0xFFD1E7DD) 
+                            else Color(0xFFF8D7DA)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            results.status,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            color = if (results.status == "DI DALAM KELAS METER") 
+                                Color(0xFF0F5132) 
+                            else Color(0xFF842029)
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Error: ${String.format("%.2f", results.error)}% | Batas: ±${results.kelasMeter}%",
+                            fontSize = 12.sp,
+                            color = if (results.status == "DI DALAM KELAS METER") 
+                                Color(0xFF0F5132) 
+                            else Color(0xFF842029)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ResultBox(
+    title: String,
+    value: String,
+    unit: String,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = color.copy(alpha = 0.1f)),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .padding(12.dp)
+                .fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                title,
+                fontSize = 12.sp,
+                color = Color(0xFF6C757D)
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                value,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = color
+            )
+            Text(
+                unit,
+                fontSize = 10.sp,
+                color = color.copy(alpha = 0.8f)
+            )
+        }
+    }
+}
+
+@Composable
+fun BlinkRecordItem(
+    record: BlinkRecord,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) Color(0xFFE7F1FF) else Color.White
+        ),
+        shape = RoundedCornerShape(8.dp),
+        border = if (isSelected) BorderStroke(2.dp, Color(0xFF0D6EFD)) else null
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    "Impulse ke-${record.blinkNumber}",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Color(0xFF333333)
+                )
+                Text(
+                    "Pada detik ${String.format("%.2f", record.timeSeconds)}",
+                    fontSize = 12.sp,
+                    color = Color(0xFF6C757D)
+                )
+            }
+            
+            if (isSelected) {
+                Box(
+                    modifier = Modifier
+                        .size(20.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF0D6EFD)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "✓",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ================= RIWAYAT SCREEN =================
+@Composable
 fun RiwayatScreen(viewModel: KwhViewModel, onNavigateToInput: () -> Unit) {
     val riwayatList by viewModel.riwayatList.collectAsState()
+    val userInfo by viewModel.userInfo.collectAsState()
     var showDeleteAllDialog by remember { mutableStateOf(false) }
     var showExportOptions by remember { mutableStateOf(false) }
     var exportInProgress by remember { mutableStateOf(false) }
@@ -1916,6 +3471,7 @@ fun RiwayatScreen(viewModel: KwhViewModel, onNavigateToInput: () -> Unit) {
         PdfExporter.exportRiwayatToPdf(
             context = context,
             riwayat = riwayat,
+            userInfo = userInfo,
             onSuccess = { uri ->
                 exportInProgress = false
                 val fileName = "Laporan_${if (riwayat.pelangganData.nama.isNotEmpty()) riwayat.pelangganData.nama else "Data"}.html"
@@ -2216,7 +3772,9 @@ fun RiwayatItem(
                         onDelete()
                         showDeleteDialog = false
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC3545))
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFDC3545)
+                    )
                 ) {
                     Text("Hapus")
                 }
@@ -2441,750 +3999,6 @@ fun RiwayatItem(
                 fontSize = 10.sp,
                 color = Color(0xFF6C757D)
             )
-        }
-    }
-}
-
-// ================= MODE SCREENS (disingkat karena panjang) =================
-
-@Composable
-fun Mode1Screen(
-    blinkCount: Int,
-    elapsedTime: Long,
-    isCounting: Boolean,
-    arus: String,
-    classMeter: String,
-    voltage: String,
-    cosphi: String,
-    konstanta: String,
-    blinkRecords: List<BlinkRecord>,
-    selectedBlinkIndex: Int?,
-    results: CalculationResult,
-    isCalculationValid: Boolean,
-    onArusChange: (String) -> Unit,
-    onClassMeterChange: (String) -> Unit,
-    onVoltageChange: (String) -> Unit,
-    onCosphiChange: (String) -> Unit,
-    onKonstantaChange: (String) -> Unit,
-    onTimerToggle: () -> Unit,
-    onBlinkClick: () -> Unit,
-    onReset: () -> Unit,
-    onSelectBlink: (Int) -> Unit
-) {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        // P1 Input Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    "P1: Impulse Meter",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
-                    color = Color(0xFF0D6EFD)
-                )
-                
-                Spacer(Modifier.height(16.dp))
-                
-                // Timer dan tombol
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Text("Waktu", fontSize = 12.sp, color = Color.Gray)
-                        Text(
-                            String.format("%.2f", elapsedTime / 1000.0) + " detik",
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF0D6EFD)
-                        )
-                    }
-                    
-                    Button(
-                        onClick = onTimerToggle,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isCounting) Color(0xFFDC3545) else Color(0xFF198754)
-                        )
-                    ) {
-                        Text(if (isCounting) "STOP" else "START")
-                    }
-                }
-                
-                Spacer(Modifier.height(16.dp))
-                
-                // Tombol impulse
-                Button(
-                    onClick = onBlinkClick,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(80.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF0D6EFD)
-                    ),
-                    enabled = isCounting || blinkCount == 0
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            "IMPULSE",
-                            fontSize = 14.sp,
-                            color = Color.White.copy(alpha = 0.8f)
-                        )
-                        Text(
-                            blinkCount.toString(),
-                            fontSize = 28.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                    }
-                }
-                
-                Spacer(Modifier.height(16.dp))
-                
-                // Parameter
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = konstanta,
-                        onValueChange = onKonstantaChange,
-                        label = { Text("Konstanta") },
-                        modifier = Modifier.weight(1f),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                    )
-                    OutlinedTextField(
-                        value = classMeter,
-                        onValueChange = onClassMeterChange,
-                        label = { Text("Kelas Meter") },
-                        modifier = Modifier.weight(1f),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                    )
-                }
-                
-                if (blinkRecords.isNotEmpty()) {
-                    Spacer(Modifier.height(12.dp))
-                    Text("Rekaman Impulse:", fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(8.dp))
-                    LazyColumn(modifier = Modifier.height(100.dp)) {
-                        items(blinkRecords) { record ->
-                            BlinkRecordItem(
-                                record = record,
-                                isSelected = selectedBlinkIndex == blinkRecords.indexOf(record),
-                                onClick = { onSelectBlink(blinkRecords.indexOf(record)) }
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        
-        // P2 Input Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    "P2: V × I × Cosφ",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
-                    color = Color(0xFF198754)
-                )
-                
-                Spacer(Modifier.height(16.dp))
-                
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = arus,
-                        onValueChange = onArusChange,
-                        label = { Text("Arus (I)") },
-                        modifier = Modifier.weight(1f),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                    )
-                    OutlinedTextField(
-                        value = voltage,
-                        onValueChange = onVoltageChange,
-                        label = { Text("Tegangan (V)") },
-                        modifier = Modifier.weight(1f),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                    )
-                }
-                
-                Spacer(Modifier.height(8.dp))
-                
-                OutlinedTextField(
-                    value = cosphi,
-                    onValueChange = onCosphiChange,
-                    label = { Text("Cos φ") },
-                    modifier = Modifier.fillMaxWidth(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                )
-            }
-        }
-        
-        // Results Card
-        ResultsCard(results, isCalculationValid, mode = 1)
-    }
-}
-
-@Composable
-fun Mode2Screen(
-    p1Input: String,
-    phaseR: String,
-    phaseS: String,
-    phaseT: String,
-    classMeter: String,
-    voltage: String,
-    cosphi: String,
-    konstanta: String,
-    results: CalculationResult,
-    isCalculationValid: Boolean,
-    onP1InputChange: (String) -> Unit,
-    onPhaseRChange: (String) -> Unit,
-    onPhaseSChange: (String) -> Unit,
-    onPhaseTChange: (String) -> Unit,
-    onClassMeterChange: (String) -> Unit,
-    onVoltageChange: (String) -> Unit,
-    onCosphiChange: (String) -> Unit,
-    onKonstantaChange: (String) -> Unit
-) {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        // P1 Input Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    "P1: Display Meter",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
-                    color = Color(0xFF0D6EFD)
-                )
-                
-                Spacer(Modifier.height(16.dp))
-                
-                OutlinedTextField(
-                    value = p1Input,
-                    onValueChange = onP1InputChange,
-                    label = { Text("P1 (kW) dari Display") },
-                    modifier = Modifier.fillMaxWidth(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                )
-                
-                Spacer(Modifier.height(16.dp))
-                
-                OutlinedTextField(
-                    value = classMeter,
-                    onValueChange = onClassMeterChange,
-                    label = { Text("Kelas Meter (%)") },
-                    modifier = Modifier.fillMaxWidth(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                )
-            }
-        }
-        
-        // P2 Input Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    "P2: Tang kW",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
-                    color = Color(0xFF198754)
-                )
-                
-                Spacer(Modifier.height(16.dp))
-                
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = phaseR,
-                        onValueChange = onPhaseRChange,
-                        label = { Text("Phase R") },
-                        modifier = Modifier.weight(1f),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                    )
-                    OutlinedTextField(
-                        value = phaseS,
-                        onValueChange = onPhaseSChange,
-                        label = { Text("Phase S") },
-                        modifier = Modifier.weight(1f),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                    )
-                    OutlinedTextField(
-                        value = phaseT,
-                        onValueChange = onPhaseTChange,
-                        label = { Text("Phase T") },
-                        modifier = Modifier.weight(1f),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                    )
-                }
-            }
-        }
-        
-        // Results Card
-        ResultsCard(results, isCalculationValid, mode = 2)
-    }
-}
-
-@Composable
-fun CombinedModeScreen(
-    mode: Int,
-    // Parameters for Mode 3
-    blinkCount: Int = 0,
-    elapsedTime: Long = 0,
-    isCounting: Boolean = false,
-    classMeter: String = "",
-    konstanta: String = "",
-    phaseR: String = "",
-    phaseS: String = "",
-    phaseT: String = "",
-    blinkRecords: List<BlinkRecord> = emptyList(),
-    selectedBlinkIndex: Int? = null,
-    // Parameters for Mode 4
-    p1Input: String = "",
-    arus: String = "",
-    voltage: String = "",
-    cosphi: String = "",
-    results: CalculationResult,
-    isCalculationValid: Boolean,
-    // Callbacks
-    onClassMeterChange: (String) -> Unit = {},
-    onKonstantaChange: (String) -> Unit = {},
-    onPhaseRChange: (String) -> Unit = {},
-    onPhaseSChange: (String) -> Unit = {},
-    onPhaseTChange: (String) -> Unit = {},
-    onTimerToggle: () -> Unit = {},
-    onBlinkClick: () -> Unit = {},
-    onReset: () -> Unit = {},
-    onSelectBlink: (Int) -> Unit = {},
-    onP1InputChange: (String) -> Unit = {},
-    onArusChange: (String) -> Unit = {},
-    onVoltageChange: (String) -> Unit = {},
-    onCosphiChange: (String) -> Unit = {}
-) {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        if (mode == 3) {
-            // MODE 3 Components
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("P1: Impulse Meter", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF0D6EFD))
-                    
-                    Spacer(Modifier.height(16.dp))
-                    
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text("Waktu", fontSize = 12.sp, color = Color.Gray)
-                            Text(
-                                String.format("%.2f", elapsedTime / 1000.0) + " detik",
-                                fontSize = 20.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF0D6EFD)
-                            )
-                        }
-                        
-                        Button(
-                            onClick = onTimerToggle,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isCounting) Color(0xFFDC3545) else Color(0xFF198754)
-                            )
-                        ) {
-                            Text(if (isCounting) "STOP" else "START")
-                        }
-                    }
-                    
-                    Spacer(Modifier.height(16.dp))
-                    
-                    Button(
-                        onClick = onBlinkClick,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(80.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF0D6EFD)
-                        ),
-                        enabled = isCounting || blinkCount == 0
-                    ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text("IMPULSE", fontSize = 14.sp, color = Color.White.copy(alpha = 0.8f))
-                            Text(blinkCount.toString(), fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                        }
-                    }
-                    
-                    Spacer(Modifier.height(16.dp))
-                    
-                    OutlinedTextField(
-                        value = konstanta,
-                        onValueChange = onKonstantaChange,
-                        label = { Text("Konstanta") },
-                        modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                    )
-                }
-            }
-            
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("P2: Tang kW", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF198754))
-                    
-                    Spacer(Modifier.height(16.dp))
-                    
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = phaseR,
-                            onValueChange = onPhaseRChange,
-                            label = { Text("Phase R") },
-                            modifier = Modifier.weight(1f),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                        )
-                        OutlinedTextField(
-                            value = phaseS,
-                            onValueChange = onPhaseSChange,
-                            label = { Text("Phase S") },
-                            modifier = Modifier.weight(1f),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                        )
-                        OutlinedTextField(
-                            value = phaseT,
-                            onValueChange = onPhaseTChange,
-                            label = { Text("Phase T") },
-                            modifier = Modifier.weight(1f),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                        )
-                    }
-                }
-            }
-        } else {
-            // MODE 4 Components
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("P1: Display Meter", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF0D6EFD))
-                    
-                    Spacer(Modifier.height(16.dp))
-                    
-                    OutlinedTextField(
-                        value = p1Input,
-                        onValueChange = onP1InputChange,
-                        label = { Text("P1 (kW) dari Display") },
-                        modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                    )
-                }
-            }
-            
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("P2: V × I × Cosφ", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF198754))
-                    
-                    Spacer(Modifier.height(16.dp))
-                    
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = arus,
-                            onValueChange = onArusChange,
-                            label = { Text("Arus (I)") },
-                            modifier = Modifier.weight(1f),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                        )
-                        OutlinedTextField(
-                            value = voltage,
-                            onValueChange = onVoltageChange,
-                            label = { Text("Tegangan (V)") },
-                            modifier = Modifier.weight(1f),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                        )
-                    }
-                    
-                    Spacer(Modifier.height(8.dp))
-                    
-                    OutlinedTextField(
-                        value = cosphi,
-                        onValueChange = onCosphiChange,
-                        label = { Text("Cos φ") },
-                        modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                    )
-                }
-            }
-            
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Kelas Meter", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF333333))
-                    
-                    Spacer(Modifier.height(16.dp))
-                    
-                    OutlinedTextField(
-                        value = classMeter,
-                        onValueChange = onClassMeterChange,
-                        label = { Text("Kelas Meter (%)") },
-                        modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                    )
-                }
-            }
-        }
-        
-        // Results Card
-        ResultsCard(results, isCalculationValid, mode)
-    }
-}
-
-@Composable
-fun ResultsCard(results: CalculationResult, isCalculationValid: Boolean, mode: Int) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                getModeText(mode),
-                fontWeight = FontWeight.Bold,
-                fontSize = 16.sp
-            )
-            
-            Spacer(Modifier.height(16.dp))
-            
-            if (!isCalculationValid) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0xFFFFF3CD))
-                        .padding(16.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "Lengkapi semua input untuk melihat hasil",
-                        fontSize = 14.sp,
-                        color = Color(0xFF856404)
-                    )
-                }
-            } else {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    ResultBox(
-                        title = "P1",
-                        value = String.format("%.3f", results.p1),
-                        unit = "kW",
-                        color = Color(0xFF0D6EFD),
-                        modifier = Modifier.weight(1f)
-                    )
-                    ResultBox(
-                        title = "P2",
-                        value = String.format("%.3f", results.p2),
-                        unit = "kW",
-                        color = Color(0xFF198754),
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-                
-                Spacer(Modifier.height(16.dp))
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    ResultBox(
-                        title = "ERROR",
-                        value = String.format("%.2f", results.error),
-                        unit = "%",
-                        color = if (Math.abs(results.error) <= results.kelasMeter) 
-                            Color(0xFF198754) 
-                        else Color(0xFFDC3545),
-                        modifier = Modifier.weight(1f)
-                    )
-                    ResultBox(
-                        title = "KELAS",
-                        value = String.format("%.1f", results.kelasMeter),
-                        unit = "%",
-                        color = Color(0xFF6C757D),
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-                
-                Spacer(Modifier.height(16.dp))
-                
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(
-                            color = if (results.status == "DI DALAM KELAS METER") 
-                                Color(0xFFD1E7DD) 
-                            else Color(0xFFF8D7DA)
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            results.status,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp,
-                            color = if (results.status == "DI DALAM KELAS METER") 
-                                Color(0xFF0F5132) 
-                            else Color(0xFF842029)
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            "Error: ${String.format("%.2f", results.error)}% | Batas: ±${results.kelasMeter}%",
-                            fontSize = 12.sp,
-                            color = if (results.status == "DI DALAM KELAS METER") 
-                                Color(0xFF0F5132) 
-                            else Color(0xFF842029)
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun ResultBox(
-    title: String,
-    value: String,
-    unit: String,
-    color: Color,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(containerColor = color.copy(alpha = 0.1f)),
-        shape = RoundedCornerShape(8.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .padding(12.dp)
-                .fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                title,
-                fontSize = 12.sp,
-                color = Color(0xFF6C757D)
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                value,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                color = color
-            )
-            Text(
-                unit,
-                fontSize = 10.sp,
-                color = color.copy(alpha = 0.8f)
-            )
-        }
-    }
-}
-
-@Composable
-fun BlinkRecordItem(
-    record: BlinkRecord,
-    isSelected: Boolean,
-    onClick: () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() },
-        colors = CardDefaults.cardColors(
-            containerColor = if (isSelected) Color(0xFFE7F1FF) else Color.White
-        ),
-        shape = RoundedCornerShape(8.dp),
-        border = if (isSelected) BorderStroke(2.dp, Color(0xFF0D6EFD)) else null
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text(
-                    "Impulse ke-${record.blinkNumber}",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = Color(0xFF333333)
-                )
-                Text(
-                    "Pada detik ${String.format("%.2f", record.timeSeconds)}",
-                    fontSize = 12.sp,
-                    color = Color(0xFF6C757D)
-                )
-            }
-            
-            if (isSelected) {
-                Box(
-                    modifier = Modifier
-                        .size(20.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFF0D6EFD)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "✓",
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
         }
     }
 }
