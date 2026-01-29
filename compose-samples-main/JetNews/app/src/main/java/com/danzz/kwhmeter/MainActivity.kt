@@ -823,8 +823,28 @@ fun createImageFile(context: Context): File? {
     }
 }
 
-// ================= PDF EXPORTER (REAL PDF) =================
+// ================= PDF EXPORTER (REAL PDF) - 2 KOLOM LAYOUT =================
 object PdfExporter {
+    
+    // Konstanta untuk layout
+    private const val PAGE_WIDTH = 595f // A4 width in points
+    private const val PAGE_HEIGHT = 842f // A4 height in points
+    private const val MARGIN = 25f
+    private const val COLUMN_GAP = 12f
+    private const val SECTION_SPACING = 18f
+    private const val CARD_HEADER_HEIGHT = 22f
+    private const val LABEL_WIDTH = 85f  // Lebar fixed untuk label
+    
+    // Warna tema - menggunakan android.graphics.Color untuk PDF
+    private val COLOR_PRIMARY = android.graphics.Color.parseColor("#1B5E20") // Dark Green PLN
+    private val COLOR_SECONDARY = android.graphics.Color.parseColor("#388E3C") // Green
+    private val COLOR_ACCENT = android.graphics.Color.parseColor("#1976D2") // Blue
+    private val COLOR_SUCCESS = android.graphics.Color.parseColor("#4CAF50") // Green success
+    private val COLOR_ERROR = android.graphics.Color.parseColor("#F44336") // Red error
+    private val COLOR_TEXT = android.graphics.Color.parseColor("#212121") // Dark grey
+    private val COLOR_TEXT_SECONDARY = android.graphics.Color.parseColor("#757575") // Grey
+    private val COLOR_BORDER = android.graphics.Color.parseColor("#E0E0E0") // Light grey
+    private val COLOR_BACKGROUND = android.graphics.Color.parseColor("#F5F5F5") // Light background
     
     fun exportRiwayatToPdf(
         context: Context,
@@ -879,16 +899,13 @@ object PdfExporter {
                 putExtra(Intent.EXTRA_TEXT, """
                     Laporan Pengujian KWH Meter
                     
-                    Format: PDF dengan layout 2 kolom
-                    
                     Isi laporan:
                     ✓ Data Pelanggan
                     ✓ Parameter Pengujian
-                    ✓ Sumber Perhitungan
                     ✓ Data Input
                     ✓ Hasil Pengukuran
-                    ✓ Kesimpulan
-                    ✓ Tanda Tangan
+                    ✓ Dokumentasi Foto
+                    ✓ Tanda Tangan Pelaksana
                     
                     © ${SimpleDateFormat("yyyy", Locale.getDefault()).format(Date())} - KWH Meter Test
                 """.trimIndent())
@@ -903,411 +920,60 @@ object PdfExporter {
     }
     
     private fun createPdfDocument(context: Context, riwayat: RiwayatData, pdfFile: File, userInfo: UserInfo?) {
-        val document = PdfDocument()
+        val document = android.graphics.pdf.PdfDocument()
         
-        // Buat halaman A4 (595 x 842 points)
-        val pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create()
+        // Buat halaman A4 Portrait
+        val pageInfo = android.graphics.pdf.PdfDocument.PageInfo.Builder(
+            PAGE_WIDTH.toInt(), 
+            PAGE_HEIGHT.toInt(), 
+            1
+        ).create()
         val page = document.startPage(pageInfo)
         val canvas = page.canvas
-        val paint = android.graphics.Paint()
         
-        // Warna modern
-        val colorPrimary = android.graphics.Color.parseColor("#2E7D32") // Hijau PLN
-        val colorSecondary = android.graphics.Color.parseColor("#FF9800") // Oranye
-        val colorAccent = android.graphics.Color.parseColor("#1976D2") // Biru
-        val colorSuccess = android.graphics.Color.parseColor("#4CAF50") // Hijau sukses
-        val colorError = android.graphics.Color.parseColor("#F44336") // Merah error
-        val colorText = android.graphics.Color.parseColor("#424242") // Text grey
-        val colorLight = android.graphics.Color.parseColor("#F5F5F5") // Light grey
-        
-        // Fungsi helper untuk warna dengan alpha
-        fun colorWithAlpha(color: Int, alpha: Int): Int {
-            return android.graphics.Color.argb(
-                alpha,
-                android.graphics.Color.red(color),
-                android.graphics.Color.green(color),
-                android.graphics.Color.blue(color)
-            )
+        // Set background putih
+        val backgroundPaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.WHITE
+            style = android.graphics.Paint.Style.FILL
         }
+        canvas.drawRect(0f, 0f, PAGE_WIDTH, PAGE_HEIGHT, backgroundPaint)
         
-        // Background halaman
-        paint.color = android.graphics.Color.WHITE
-        paint.style = android.graphics.Paint.Style.FILL
-        canvas.drawRect(0f, 0f, 595f, 842f, paint)
+        var currentY = MARGIN
         
-        // ===== HEADER UTAMA DI TENGAH =====
-        paint.color = colorPrimary
-        paint.textSize = 18f
-        paint.isFakeBoldText = true
-        val headerText1 = "LAPORAN PENGUKURAN ERROR kWh METER"
-        val header1Width = paint.measureText(headerText1)
-        canvas.drawText(headerText1, (595f - header1Width) / 2, 40f, paint)
+        // ===== HEADER UTAMA =====
+        currentY = drawMainHeader(canvas, riwayat, currentY)
+        currentY += SECTION_SPACING
         
-        paint.color = colorSecondary
-        paint.textSize = 14f
-        val headerText2 = "PLN UP3 PONDOK GEDE"
-        val header2Width = paint.measureText(headerText2)
-        canvas.drawText(headerText2, (595f - header2Width) / 2, 65f, paint)
+        // ===== LAYOUT 2 KOLOM =====
+        val columnWidth = (PAGE_WIDTH - 2 * MARGIN - COLUMN_GAP) / 2
         
-        // Garis header di tengah
-        paint.color = colorPrimary
-        paint.strokeWidth = 2f
-        val lineStart = (595f - 400f) / 2
-        val lineEnd = lineStart + 400f
-        canvas.drawLine(lineStart, 75f, lineEnd, 75f, paint)
+        // Kolom Kiri
+        var leftColumnY = currentY
+        leftColumnY = drawCustomerDataSection(canvas, riwayat, MARGIN, leftColumnY, columnWidth)
+        leftColumnY += SECTION_SPACING
         
-        paint.color = colorSecondary
-        paint.strokeWidth = 1f
-        canvas.drawLine(lineStart, 78f, lineEnd, 78f, paint)
+        leftColumnY = drawEnergyCalculationSection(canvas, riwayat, MARGIN, leftColumnY, columnWidth)
+        leftColumnY += SECTION_SPACING
         
-        var yPos = 95f // Ditambah untuk lebih longgar
-        val columnWidth = 240f
-        val columnGap = 35f // Ditambah gap antar kolom
+        leftColumnY = drawParameterSection(canvas, riwayat, MARGIN, leftColumnY, columnWidth)
         
-        // ===== KOLOM KIRI =====
-        var currentY = yPos
-        var xPos = 40f // Dikurangi dari 50f untuk margin kiri lebih besar
+        // Kolom Kanan
+        var rightColumnY = currentY
+        rightColumnY = drawResultsSection(canvas, riwayat, MARGIN + columnWidth + COLUMN_GAP, rightColumnY, columnWidth)
+        rightColumnY += SECTION_SPACING
         
-        // CARD 1: DATA PELANGGAN (Kiri Atas)
-        drawModernCard(canvas, xPos, currentY, columnWidth, 120f, "DATA PELANGGAN", colorPrimary)
-        currentY += 28f // Spasi judul ke konten ditambah
+        rightColumnY = drawDocumentationSection(context, canvas, riwayat, MARGIN + columnWidth + COLUMN_GAP, rightColumnY, columnWidth)
+        rightColumnY += SECTION_SPACING
         
-        paint.color = colorText
-        paint.textSize = 11f
-        paint.isFakeBoldText = false
-        
-        // Nama pelanggan dengan padding lebih
-        canvas.drawText("Nama", xPos + 20f, currentY, paint)
-        paint.isFakeBoldText = true
-        canvas.drawText(": ${riwayat.pelangganData.nama.ifEmpty { "-" }}", xPos + 85f, currentY, paint)
-        currentY += 24f // Spasi antar baris ditambah
-        
-        // ID pelanggan
-        paint.isFakeBoldText = false
-        canvas.drawText("ID Pelanggan", xPos + 20f, currentY, paint)
-        paint.isFakeBoldText = true
-        canvas.drawText(": ${riwayat.pelangganData.idPelanggan.ifEmpty { "-" }}", xPos + 85f, currentY, paint)
-        currentY += 24f
-        
-        // Kelas meter
-        paint.isFakeBoldText = false
-        canvas.drawText("Kelas Meter", xPos + 20f, currentY, paint)
-        paint.color = colorPrimary
-        paint.isFakeBoldText = true
-        canvas.drawText(": ${riwayat.calculationResult.kelasMeter}%", xPos + 85f, currentY, paint)
-        paint.color = colorText
-        
-        currentY += 55f // Spasi antar card lebih besar
-        
-        // CARD 2: PERHITUNGAN ENERGI (Kiri Tengah)
-        drawModernCard(canvas, xPos, currentY, columnWidth, 110f, "PERHITUNGAN ENERGI", colorSecondary)
-        currentY += 28f // Spasi judul ke konten ditambah
-        
-        // P1 dengan styling
-        paint.color = colorText
-        paint.isFakeBoldText = false
-        canvas.drawText("P1", xPos + 20f, currentY, paint)
-        paint.color = colorAccent
-        paint.isFakeBoldText = true
-        paint.textSize = 13f
-        canvas.drawText("= ${String.format("%.3f", riwayat.calculationResult.p1)} kW", xPos + 75f, currentY, paint)
-        
-        currentY += 28f // Spasi antar baris ditambah
-        
-        // P2 dengan styling
-        paint.color = colorText
-        paint.isFakeBoldText = false
-        paint.textSize = 11f
-        canvas.drawText("P2", xPos + 20f, currentY, paint)
-        paint.color = colorSuccess
-        paint.isFakeBoldText = true
-        paint.textSize = 13f
-        canvas.drawText("= ${String.format("%.3f", riwayat.calculationResult.p2)} kW", xPos + 75f, currentY, paint)
-        
-        currentY += 55f // Spasi antar card lebih besar
-        
-        // CARD 3: PARAMETER PENGUKURAN (Kiri Bawah)
-        drawModernCard(canvas, xPos, currentY, columnWidth, 190f, "PARAMETER PENGUKURAN", colorAccent)
-        currentY += 28f // Spasi judul ke konten ditambah
-        
-        paint.color = colorText
-        paint.textSize = 10.5f
-        paint.isFakeBoldText = false
-        
-        val params = listOf(
-            "Tegangan" to "${riwayat.inputData.voltage} V",
-            "Arus" to "${if (riwayat.inputData.arus.isNotEmpty()) riwayat.inputData.arus else "0.0"} A",
-            "Cosphi" to riwayat.inputData.cosphi,
-            "Imp/kWh" to riwayat.inputData.konstanta,
-            "Putaran" to "${riwayat.inputData.blinkCount} kali",
-            "Waktu" to "${String.format("%.2f", riwayat.inputData.elapsedTime / 1000.0)} detik"
-        )
-        
-        params.forEachIndexed { index, (label, value) ->
-            canvas.drawText(label, xPos + 20f, currentY, paint)
-            paint.color = colorPrimary
-            paint.isFakeBoldText = true
-            canvas.drawText(": $value", xPos + 95f, currentY, paint)
-            paint.color = colorText
-            paint.isFakeBoldText = false
-            currentY += 22f // Spasi antar baris ditambah
-        }
-        
-        // ===== KOLOM KANAN =====
-        currentY = yPos
-        xPos = 40f + columnWidth + columnGap // Disesuaikan dengan margin baru
-        
-        // CARD 4: HASIL PERHITUNGAN (Kanan Atas)
-        drawModernCard(canvas, xPos, currentY, columnWidth, 140f, "HASIL PERHITUNGAN", colorPrimary)
-        currentY += 28f // Spasi judul ke konten ditambah
-        
-        paint.color = colorText
-        paint.textSize = 10.5f
-        paint.isFakeBoldText = false
-        
-        // Rumus error sederhana
-        canvas.drawText("Rumus Error:", xPos + 20f, currentY, paint)
-        currentY += 20f
-        
-        paint.color = colorText
-        paint.textSize = 10f
-        paint.isFakeBoldText = true
-        canvas.drawText("Error = [(P1 - P2) ÷ P2] × 100%", xPos + 25f, currentY, paint)
-        
-        currentY += 28f
-        
-        // Persen error
-        paint.color = colorText
-        paint.textSize = 10.5f
-        paint.isFakeBoldText = false
-        canvas.drawText("Persen Error:", xPos + 20f, currentY, paint)
-        
-        val errorValue = riwayat.calculationResult.error
-        val errorColor = if (Math.abs(errorValue) <= riwayat.calculationResult.kelasMeter) 
-            colorSuccess else colorError
-        
-        // Badge untuk persen error
-        paint.color = colorWithAlpha(errorColor, 51) // alpha 20%
-        paint.style = android.graphics.Paint.Style.FILL
-        val errorText = "${String.format("%.2f", errorValue)}%"
-        val errorTextWidth = paint.measureText(errorText)
-        canvas.drawRoundRect(
-            xPos + 100f, currentY - 12f,
-            xPos + 100f + errorTextWidth + 25f, currentY + 8f,
-            8f, 8f, paint
-        )
-        
-        paint.color = errorColor
-        paint.textSize = 14f
-        paint.isFakeBoldText = true
-        canvas.drawText(errorText, xPos + 113f, currentY, paint)
-        
-        currentY += 32f
-        
-        // Status
-        paint.color = colorText
-        paint.textSize = 10.5f
-        paint.isFakeBoldText = false
-        canvas.drawText("Status Error:", xPos + 20f, currentY, paint)
-        
-        val status = riwayat.calculationResult.status
-        val statusColor = if (status == "DI DALAM KELAS METER") colorSuccess else colorError
-        
-        // Badge untuk status
-        paint.color = colorWithAlpha(statusColor, 51) // alpha 20%
-        paint.style = android.graphics.Paint.Style.FILL
-        val statusTextWidth = paint.measureText(status)
-        canvas.drawRoundRect(
-            xPos + 90f, currentY - 12f,
-            xPos + 90f + statusTextWidth + 25f, currentY + 8f,
-            8f, 8f, paint
-        )
-        
-        paint.color = statusColor
-        paint.textSize = 12f
-        paint.isFakeBoldText = true
-        canvas.drawText(status, xPos + 103f, currentY, paint)
-        
-        currentY += 65f // Spasi antar card lebih besar
-        
-        // CARD 5: DOKUMENTASI (Kanan Tengah) - FOTO SAJA, TANPA TEKS
-        val fotoCardHeight = if (riwayat.pelangganData.fotoPath.isNotEmpty()) 210f else 110f
-        drawModernCard(canvas, xPos, currentY, columnWidth, fotoCardHeight, "DOKUMENTASI", colorSecondary)
-        currentY += 28f // Spasi judul ke konten ditambah
-        
-        if (riwayat.pelangganData.fotoPath.isNotEmpty()) {
-            try {
-                // Load dan tampilkan foto
-                val file = File(riwayat.pelangganData.fotoPath)
-                if (file.exists()) {
-                    // Decode dengan ukuran yang sesuai
-                    val options = android.graphics.BitmapFactory.Options()
-                    options.inJustDecodeBounds = true
-                    android.graphics.BitmapFactory.decodeFile(file.absolutePath, options)
-                    
-                    // Hitung scaling - ukuran maksimal untuk card
-                    val maxWidth = columnWidth - 60f // Lebih kecil untuk padding lebih
-                    val maxHeight = 150f // Tinggi maksimal
-                    val imageWidth = options.outWidth
-                    val imageHeight = options.outHeight
-                    
-                    val widthScale = maxWidth / imageWidth
-                    val heightScale = maxHeight / imageHeight
-                    val scale = kotlin.math.min(widthScale, heightScale)
-                    
-                    val targetWidth = imageWidth * scale
-                    val targetHeight = imageHeight * scale
-                    
-                    // Decode dengan ukuran yang sudah di-scale
-                    options.inJustDecodeBounds = false
-                    options.inSampleSize = calculateInSampleSize(options, targetWidth.toInt(), targetHeight.toInt())
-                    
-                    val bitmap = android.graphics.BitmapFactory.decodeFile(file.absolutePath, options)
-                    if (bitmap != null) {
-                        // Resize bitmap
-                        val finalBitmap = android.graphics.Bitmap.createScaledBitmap(
-                            bitmap, 
-                            targetWidth.toInt(), 
-                            targetHeight.toInt(), 
-                            true
-                        )
-                        
-                        // Hitung posisi tengah
-                        val imageX = xPos + (columnWidth - targetWidth) / 2
-                        val imageY = currentY + 10f // Tambah padding atas
-                        
-                        // Shadow effect
-                        paint.color = android.graphics.Color.parseColor("#20000000")
-                        paint.style = android.graphics.Paint.Style.FILL
-                        canvas.drawRoundRect(
-                            imageX - 3f, imageY - 3f,
-                            imageX + targetWidth + 3f, 
-                            imageY + targetHeight + 3f,
-                            8f, 8f, paint
-                        )
-                        
-                        // Draw foto
-                        canvas.drawBitmap(finalBitmap, imageX, imageY, paint)
-                        
-                        // Border foto
-                        paint.color = colorAccent
-                        paint.style = android.graphics.Paint.Style.STROKE
-                        paint.strokeWidth = 2f
-                        canvas.drawRoundRect(
-                            imageX, imageY,
-                            imageX + targetWidth,
-                            imageY + targetHeight,
-                            5f, 5f, paint
-                        )
-                    } else {
-                        paint.color = colorError
-                        paint.textSize = 10f
-                        canvas.drawText("❌ Foto tidak dapat dimuat", xPos + 20f, currentY + 30f, paint)
-                    }
-                } else {
-                    paint.color = colorSecondary
-                    paint.textSize = 11f
-                    canvas.drawText("⚠️ File foto tidak tersedia", xPos + 20f, currentY + 40f, paint)
-                }
-            } catch (e: Exception) {
-                paint.color = colorError
-                paint.textSize = 10f
-                canvas.drawText("⚠️ Error memuat foto", xPos + 20f, currentY + 30f, paint)
-            }
-        } else {
-            paint.color = colorText
-            paint.textSize = 11f
-            val cameraIcon = "📷"
-            val cameraWidth = paint.measureText(cameraIcon)
-            canvas.drawText(
-                cameraIcon, 
-                xPos + (columnWidth - cameraWidth) / 2, 
-                currentY + 40f, 
-                paint
-            )
-            
-            paint.color = colorText
-            paint.textSize = 10f
-            val noFotoText = "Tidak ada foto"
-            canvas.drawText(
-                noFotoText, 
-                xPos + (columnWidth - paint.measureText(noFotoText)) / 2, 
-                currentY + 70f, 
-                paint
-            )
-        }
-        
-        currentY += 85f // Spasi antar card lebih besar
-        
-        // CARD 6: PELAKSANA (Kanan Bawah) - Menggunakan data dari UserInfo
-        drawModernCard(canvas, xPos, currentY, columnWidth, 130f, "PELAKSANA", colorAccent)
-        currentY += 28f // Spasi judul ke konten ditambah
-        
-        paint.color = colorText
-        paint.textSize = 10.5f
-        paint.isFakeBoldText = false
-        
-        // Nama dari UserInfo
-        val namaPelaksana = userInfo?.namaLengkap ?: "__________________"
-        canvas.drawText("Nama", xPos + 20f, currentY, paint)
-        paint.color = colorPrimary
-        paint.isFakeBoldText = true
-        canvas.drawText(": $namaPelaksana", xPos + 80f, currentY, paint)
-        paint.color = colorText
-        paint.isFakeBoldText = false
-        currentY += 28f // Spasi antar baris ditambah
-        
-        // NIP dari UserInfo
-        val nipPelaksana = userInfo?.nip ?: "__________________"
-        canvas.drawText("NIP", xPos + 20f, currentY, paint)
-        paint.color = colorPrimary
-        paint.isFakeBoldText = true
-        canvas.drawText(": $nipPelaksana", xPos + 80f, currentY, paint)
-        paint.color = colorText
-        paint.isFakeBoldText = false
-        currentY += 28f
-        
-        // Kedudukan dari UserInfo
-        val kedudukan = userInfo?.kedudukanPerusahaan ?: "Petugas Pelaksana"
-        canvas.drawText("Kedudukan", xPos + 20f, currentY, paint)
-        paint.color = colorPrimary
-        paint.isFakeBoldText = true
-        canvas.drawText(": $kedudukan", xPos + 80f, currentY, paint)
+        rightColumnY = drawTesterInfoSection(canvas, userInfo, MARGIN + columnWidth + COLUMN_GAP, rightColumnY, columnWidth)
         
         // ===== FOOTER =====
-        paint.color = colorLight
-        paint.style = android.graphics.Paint.Style.FILL
-        canvas.drawRect(0f, 820f, 595f, 842f, paint)
+        drawFooter(canvas, riwayat, currentY)
         
-        paint.color = colorPrimary
-        paint.strokeWidth = 1f
-        canvas.drawLine(50f, 820f, 545f, 820f, paint)
+        // ===== WATERMARK =====
+        drawWatermark(canvas)
         
-        paint.color = colorText
-        paint.textSize = 8f
-        paint.isFakeBoldText = false
-        
-        val printTime = "Dicetak: ${formatTimestamp(System.currentTimeMillis())}"
-        canvas.drawText(printTime, 50f, 835f, paint)
-        
-        val pageText = "Halaman 1/1"
-        canvas.drawText(pageText, 297.5f - paint.measureText(pageText)/2, 835f, paint)
-        
-        val idText = "ID: ${riwayat.id.take(8).uppercase()}"
-        canvas.drawText(idText, 545f - paint.measureText(idText), 835f, paint)
-        
-        // Watermark
-        paint.color = colorWithAlpha(colorPrimary, 15)
-        paint.textSize = 80f
-        paint.isFakeBoldText = true
-        val watermark = "PLN"
-        val watermarkWidth = paint.measureText(watermark)
-        canvas.save()
-        canvas.rotate(-45f, 297.5f, 421f)
-        canvas.drawText(watermark, 297.5f - watermarkWidth/2, 421f, paint)
-        canvas.restore()
-        
-        // Selesaikan
+        // Selesaikan halaman
         document.finishPage(page)
         
         try {
@@ -1319,6 +985,644 @@ object PdfExporter {
             e.printStackTrace()
             throw e
         }
+    }
+    
+    private fun drawMainHeader(canvas: android.graphics.Canvas, riwayat: RiwayatData, startY: Float): Float {
+        var yPos = startY
+        
+        // Background header
+        val headerPaint = android.graphics.Paint().apply {
+            color = COLOR_PRIMARY
+            style = android.graphics.Paint.Style.FILL
+        }
+        canvas.drawRect(0f, yPos, PAGE_WIDTH, yPos + 65f, headerPaint)
+        
+        // Judul utama
+        val titlePaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.WHITE
+            textSize = 18f
+            isFakeBoldText = true
+            textAlign = android.graphics.Paint.Align.CENTER
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT_BOLD, android.graphics.Typeface.BOLD)
+        }
+        canvas.drawText("LAPORAN PENGUJIAN ERROR kWh METER", PAGE_WIDTH / 2, yPos + 25f, titlePaint)
+        
+        // Sub judul
+        val subtitlePaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.WHITE
+            textSize = 14f
+            textAlign = android.graphics.Paint.Align.CENTER
+        }
+        canvas.drawText("PLN UP3 PONDOK GEDE", PAGE_WIDTH / 2, yPos + 45f, subtitlePaint)
+        
+        return yPos + 70f
+    }
+    
+    private fun drawCustomerDataSection(canvas: android.graphics.Canvas, riwayat: RiwayatData, x: Float, y: Float, width: Float): Float {
+        val sectionHeight = 100f
+        drawCard(canvas, x, y, width, sectionHeight, "DATA PELANGGAN", COLOR_PRIMARY)
+        
+        var contentY = y + CARD_HEADER_HEIGHT + 16f
+        
+        val labelPaint = android.graphics.Paint().apply {
+            color = COLOR_TEXT_SECONDARY
+            textSize = 10f
+        }
+        
+        val valuePaint = android.graphics.Paint().apply {
+            color = COLOR_TEXT
+            textSize = 11f
+            isFakeBoldText = true
+        }
+        
+        // Nama Pelanggan - memberikan jarak yang cukup
+        canvas.drawText("Nama", x + 15f, contentY, labelPaint)
+        val nama = riwayat.pelangganData.nama.ifEmpty { "-" }
+        canvas.drawText(
+            nama, 
+            x + LABEL_WIDTH, 
+            contentY, 
+            valuePaint
+        )
+        contentY += 18f
+        
+        // ID Pelanggan
+        canvas.drawText("ID Pelanggan", x + 15f, contentY, labelPaint)
+        canvas.drawText(
+            riwayat.pelangganData.idPelanggan.ifEmpty { "-" }, 
+            x + LABEL_WIDTH, 
+            contentY, 
+            valuePaint
+        )
+        contentY += 18f
+        
+        // Kelas Meter
+        canvas.drawText("Kelas Meter", x + 15f, contentY, labelPaint)
+        canvas.drawText(
+            "${riwayat.calculationResult.kelasMeter}%",
+            x + LABEL_WIDTH,
+            contentY,
+            valuePaint
+        )
+        
+        return y + sectionHeight
+    }
+    
+    private fun drawEnergyCalculationSection(canvas: android.graphics.Canvas, riwayat: RiwayatData, x: Float, y: Float, width: Float): Float {
+        val sectionHeight = 95f
+        drawCard(canvas, x, y, width, sectionHeight, "PERHITUNGAN ENERGI", COLOR_ACCENT)
+        
+        var contentY = y + CARD_HEADER_HEIGHT + 18f
+        
+        val labelPaint = android.graphics.Paint().apply {
+            color = COLOR_TEXT_SECONDARY
+            textSize = 10f
+        }
+        
+        val valuePaint = android.graphics.Paint().apply {
+            color = COLOR_TEXT
+            textSize = 12f
+            isFakeBoldText = true
+        }
+        
+        // P1
+        canvas.drawText("P1 =", x + 15f, contentY, labelPaint)
+        canvas.drawText(
+            "${String.format("%.3f", riwayat.calculationResult.p1)} kW",
+            x + 50f,
+            contentY,
+            valuePaint
+        )
+        contentY += 20f
+        
+        // P2
+        canvas.drawText("P2 =", x + 15f, contentY, labelPaint)
+        canvas.drawText(
+            "${String.format("%.3f", riwayat.calculationResult.p2)} kW",
+            x + 50f,
+            contentY,
+            valuePaint
+        )
+        
+        // Mode
+        contentY += 18f
+        val modePaint = android.graphics.Paint().apply {
+            color = COLOR_ACCENT
+            textSize = 10f
+            isFakeBoldText = true
+            textAlign = android.graphics.Paint.Align.CENTER
+        }
+        val modeText = when (riwayat.mode) {
+            1 -> "MODE 1: LED Blink"
+            2 -> "MODE 2: Display kW"
+            3 -> "MODE 3: LED Blink"
+            4 -> "MODE 4: Display kW"
+            else -> "MODE TIDAK DIKETAHUI"
+        }
+        canvas.drawText(
+            modeText,
+            x + width / 2,
+            contentY,
+            modePaint
+        )
+        
+        return y + sectionHeight
+    }
+    
+    private fun drawParameterSection(canvas: android.graphics.Canvas, riwayat: RiwayatData, x: Float, y: Float, width: Float): Float {
+        val hasPhaseData = riwayat.mode == 2 || riwayat.mode == 3
+        val sectionHeight = if (hasPhaseData) 150f else 130f
+        drawCard(canvas, x, y, width, sectionHeight, "PARAMETER PENGUJIAN", COLOR_SECONDARY)
+        
+        var contentY = y + CARD_HEADER_HEIGHT + 16f
+        
+        val labelPaint = android.graphics.Paint().apply {
+            color = COLOR_TEXT_SECONDARY
+            textSize = 10f
+        }
+        
+        val valuePaint = android.graphics.Paint().apply {
+            color = COLOR_TEXT
+            textSize = 11f
+            isFakeBoldText = true
+        }
+        
+        val paramLeftX = x + 15f
+        val paramRightX = x + width / 2 + 10f
+        val valueOffset = 75f // Jarak dari label ke value
+        
+        var paramY = contentY
+        
+        // Kolom Kiri
+        // Tegangan
+        canvas.drawText("Tegangan", paramLeftX, paramY, labelPaint)
+        canvas.drawText("${riwayat.inputData.voltage} V", paramLeftX + valueOffset, paramY, valuePaint)
+        paramY += 16f
+        
+        // Arus
+        canvas.drawText("Arus", paramLeftX, paramY, labelPaint)
+        canvas.drawText("${if (riwayat.inputData.arus.isNotEmpty()) riwayat.inputData.arus else "0.0"} A", 
+                       paramLeftX + valueOffset, paramY, valuePaint)
+        paramY += 16f
+        
+        // Cosphi
+        canvas.drawText("Cosphi", paramLeftX, paramY, labelPaint)
+        canvas.drawText(riwayat.inputData.cosphi, paramLeftX + valueOffset, paramY, valuePaint)
+        paramY += 16f
+        
+        // Konstanta
+        canvas.drawText("Konstanta", paramLeftX, paramY, labelPaint)
+        canvas.drawText(riwayat.inputData.konstanta, paramLeftX + valueOffset, paramY, valuePaint)
+        
+        // Kolom Kanan
+        paramY = contentY
+        
+        // Data berdasarkan mode
+        when (riwayat.mode) {
+            1, 3 -> {
+                canvas.drawText("Impulse", paramRightX, paramY, labelPaint)
+                canvas.drawText("${riwayat.inputData.blinkCount} kali", paramRightX + valueOffset, paramY, valuePaint)
+                paramY += 16f
+                
+                canvas.drawText("Waktu", paramRightX, paramY, labelPaint)
+                canvas.drawText("${String.format("%.1f", riwayat.inputData.elapsedTime / 1000.0)} detik", 
+                               paramRightX + valueOffset, paramY, valuePaint)
+                paramY += 16f
+                
+                canvas.drawText("Kelas", paramRightX, paramY, labelPaint)
+                canvas.drawText("${riwayat.calculationResult.kelasMeter}%", paramRightX + valueOffset, paramY, valuePaint)
+            }
+            2, 4 -> {
+                canvas.drawText("P1 Display", paramRightX, paramY, labelPaint)
+                canvas.drawText("${riwayat.inputData.p1Input} kW", paramRightX + valueOffset, paramY, valuePaint)
+                paramY += 16f
+                
+                canvas.drawText("Kelas", paramRightX, paramY, labelPaint)
+                canvas.drawText("${riwayat.calculationResult.kelasMeter}%", paramRightX + valueOffset, paramY, valuePaint)
+                paramY += 16f
+                
+                if (riwayat.mode == 4) {
+                    canvas.drawText("Arus", paramRightX, paramY, labelPaint)
+                    canvas.drawText("${if (riwayat.inputData.arus.isNotEmpty()) riwayat.inputData.arus else "0.0"} A", 
+                                   paramRightX + valueOffset, paramY, valuePaint)
+                }
+            }
+        }
+        
+        // Jika ada data phase (Mode 2 atau 3)
+        if (hasPhaseData) {
+            paramY += 8f
+            val phaseLabelPaint = android.graphics.Paint().apply {
+                color = COLOR_ACCENT
+                textSize = 10f
+                isFakeBoldText = true
+                textAlign = android.graphics.Paint.Align.CENTER
+            }
+            
+            canvas.drawText("DATA PHASE", x + width / 2, paramY, phaseLabelPaint)
+            paramY += 14f
+            
+            val phaseOffset = 65f
+            canvas.drawText("Phase R", paramRightX, paramY, labelPaint)
+            canvas.drawText("${riwayat.inputData.phaseR} kW", paramRightX + phaseOffset, paramY, valuePaint)
+            paramY += 14f
+            
+            canvas.drawText("Phase S", paramRightX, paramY, labelPaint)
+            canvas.drawText("${riwayat.inputData.phaseS} kW", paramRightX + phaseOffset, paramY, valuePaint)
+            paramY += 14f
+            
+            canvas.drawText("Phase T", paramRightX, paramY, labelPaint)
+            canvas.drawText("${riwayat.inputData.phaseT} kW", paramRightX + phaseOffset, paramY, valuePaint)
+        }
+        
+        return y + sectionHeight
+    }
+    
+    private fun drawResultsSection(canvas: android.graphics.Canvas, riwayat: RiwayatData, x: Float, y: Float, width: Float): Float {
+        val sectionHeight = 135f
+        drawCard(canvas, x, y, width, sectionHeight, "HASIL PERHITUNGAN", COLOR_PRIMARY)
+        
+        var contentY = y + CARD_HEADER_HEIGHT + 16f
+        
+        val labelPaint = android.graphics.Paint().apply {
+            color = COLOR_TEXT_SECONDARY
+            textSize = 10f
+        }
+        
+        val formulaPaint = android.graphics.Paint().apply {
+            color = COLOR_TEXT
+            textSize = 10f
+        }
+        
+        // Rumus Error
+        canvas.drawText("Rumus Error kWh:", x + 15f, contentY, labelPaint)
+        contentY += 12f
+        
+        canvas.drawText("ε = (P1 - P2) / P2 × 100%", x + 15f, contentY, formulaPaint)
+        contentY += 22f
+        
+        // Hasil Error
+        val errorValue = riwayat.calculationResult.error
+        val errorColor = if (Math.abs(errorValue) <= riwayat.calculationResult.kelasMeter) COLOR_SUCCESS else COLOR_ERROR
+        
+        val errorLabelPaint = android.graphics.Paint().apply {
+            color = COLOR_TEXT_SECONDARY
+            textSize = 11f
+        }
+        canvas.drawText("Hasil Error:", x + 15f, contentY, errorLabelPaint)
+        
+        val errorPaint = android.graphics.Paint().apply {
+            color = errorColor
+            textSize = 22f
+            isFakeBoldText = true
+            textAlign = android.graphics.Paint.Align.RIGHT
+        }
+        
+        val errorText = "${String.format("%.2f", errorValue)}%"
+        canvas.drawText(errorText, x + width - 15f, contentY + 8f, errorPaint)
+        contentY += 32f
+        
+        // Status - diposisikan lebih ke tengah agar tidak keluar card
+        val status = riwayat.calculationResult.status
+        val statusColor = if (status == "DI DALAM KELAS METER") COLOR_SUCCESS else COLOR_ERROR
+        val statusText = if (status == "DI DALAM KELAS METER") "BAIK" else "TIDAK BAIK"
+        
+        // Box status
+        val statusBoxPaint = android.graphics.Paint().apply {
+            color = colorWithAlpha(statusColor, 15)
+            style = android.graphics.Paint.Style.FILL
+        }
+        
+        val statusBorderPaint = android.graphics.Paint().apply {
+            color = statusColor
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = 1.5f
+        }
+        
+        val statusTextPaint = android.graphics.Paint().apply {
+            color = statusColor
+            textSize = 13f
+            isFakeBoldText = true
+            textAlign = android.graphics.Paint.Align.CENTER
+        }
+        
+        val statusTextWidth = statusTextPaint.measureText(statusText)
+        val statusBoxWidth = statusTextWidth + 30f  // Lebih kecil agar tidak mentok
+        val statusBoxX = x + (width - statusBoxWidth) / 2
+        val statusBoxY = contentY - 5f  // Naikkan sedikit agar tidak mentok bawah
+        
+        // Box
+        canvas.drawRoundRect(
+            statusBoxX, statusBoxY,
+            statusBoxX + statusBoxWidth, statusBoxY + 26f,
+            5f, 5f, statusBoxPaint
+        )
+        
+        // Border
+        canvas.drawRoundRect(
+            statusBoxX, statusBoxY,
+            statusBoxX + statusBoxWidth, statusBoxY + 26f,
+            5f, 5f, statusBorderPaint
+        )
+        
+        // Text
+        canvas.drawText(
+            statusText,
+            statusBoxX + statusBoxWidth / 2,
+            statusBoxY + 17f,
+            statusTextPaint
+        )
+        
+        return y + sectionHeight
+    }
+    
+    private fun drawDocumentationSection(context: Context, canvas: android.graphics.Canvas, riwayat: RiwayatData, x: Float, y: Float, width: Float): Float {
+        val hasPhoto = riwayat.pelangganData.fotoPath.isNotEmpty()
+        val sectionHeight = if (hasPhoto) 170f else 80f
+        
+        drawCard(canvas, x, y, width, sectionHeight, "DOKUMENTASI FOTO", COLOR_SECONDARY)
+        
+        var contentY = y + CARD_HEADER_HEIGHT + 15f
+        
+        if (hasPhoto) {
+            try {
+                val file = File(riwayat.pelangganData.fotoPath)
+                if (file.exists()) {
+                    // Decode foto dengan ukuran yang sesuai
+                    val options = android.graphics.BitmapFactory.Options().apply {
+                        inJustDecodeBounds = true
+                    }
+                    android.graphics.BitmapFactory.decodeFile(file.absolutePath, options)
+                    
+                    // Hitung ukuran yang sesuai untuk container
+                    val containerWidth = width - 40f
+                    val containerHeight = 110f  // Sedikit lebih kecil
+                    
+                    val widthScale = containerWidth / options.outWidth
+                    val heightScale = containerHeight / options.outHeight
+                    val scale = minOf(widthScale, heightScale)
+                    
+                    val targetWidth = options.outWidth * scale
+                    val targetHeight = options.outHeight * scale
+                    
+                    // Decode bitmap dengan ukuran yang tepat
+                    options.inJustDecodeBounds = false
+                    options.inSampleSize = calculateInSampleSize(options, targetWidth.toInt(), targetHeight.toInt())
+                    
+                    val bitmap = android.graphics.BitmapFactory.decodeFile(file.absolutePath, options)
+                    if (bitmap != null) {
+                        val finalBitmap = android.graphics.Bitmap.createScaledBitmap(
+                            bitmap, 
+                            targetWidth.toInt(), 
+                            targetHeight.toInt(), 
+                            true
+                        )
+                        
+                        // Hitung posisi tengah
+                        val imageX = x + (width - targetWidth) / 2
+                        val imageY = contentY
+                        
+                        // Draw border dan background
+                        val borderPaint = android.graphics.Paint().apply {
+                            color = COLOR_BACKGROUND
+                            style = android.graphics.Paint.Style.FILL
+                        }
+                        
+                        canvas.drawRect(
+                            imageX - 4f, imageY - 4f,
+                            imageX + targetWidth + 4f, imageY + targetHeight + 4f,
+                            borderPaint
+                        )
+                        
+                        // Draw foto
+                        canvas.drawBitmap(finalBitmap, imageX, imageY, null)
+                        
+                        // Draw frame border
+                        val framePaint = android.graphics.Paint().apply {
+                            color = COLOR_BORDER
+                            style = android.graphics.Paint.Style.STROKE
+                            strokeWidth = 1f
+                        }
+                        canvas.drawRect(
+                            imageX - 4f, imageY - 4f,
+                            imageX + targetWidth + 4f, imageY + targetHeight + 4f,
+                            framePaint
+                        )
+                        
+                        contentY += targetHeight + 8f
+                    } else {
+                        drawNoPhotoMessage(canvas, x, contentY, width)
+                        contentY += 60f
+                    }
+                } else {
+                    drawNoPhotoMessage(canvas, x, contentY, width)
+                    contentY += 60f
+                }
+            } catch (e: Exception) {
+                drawNoPhotoMessage(canvas, x, contentY, width, "Error memuat foto")
+                contentY += 60f
+            }
+        } else {
+            drawNoPhotoMessage(canvas, x, contentY, width)
+            contentY += 60f
+        }
+        
+        return y + sectionHeight
+    }
+    
+    private fun drawNoPhotoMessage(canvas: android.graphics.Canvas, x: Float, y: Float, width: Float, message: String = "Tidak ada dokumentasi foto") {
+        val iconPaint = android.graphics.Paint().apply {
+            color = COLOR_TEXT_SECONDARY
+            textSize = 24f
+            textAlign = android.graphics.Paint.Align.CENTER
+        }
+        
+        val textPaint = android.graphics.Paint().apply {
+            color = COLOR_TEXT_SECONDARY
+            textSize = 10f
+            textAlign = android.graphics.Paint.Align.CENTER
+        }
+        
+        // Icon kamera
+        canvas.drawText("📷", x + width / 2, y + 30f, iconPaint)
+        
+        // Pesan
+        canvas.drawText(message, x + width / 2, y + 55f, textPaint)
+    }
+    
+    private fun drawTesterInfoSection(canvas: android.graphics.Canvas, userInfo: UserInfo?, x: Float, y: Float, width: Float): Float {
+        val sectionHeight = 105f
+        drawCard(canvas, x, y, width, sectionHeight, "PELAKSANA PENGUJIAN", COLOR_ACCENT)
+        
+        var contentY = y + CARD_HEADER_HEIGHT + 16f
+        
+        val labelPaint = android.graphics.Paint().apply {
+            color = COLOR_TEXT_SECONDARY
+            textSize = 10f
+        }
+        
+        val valuePaint = android.graphics.Paint().apply {
+            color = COLOR_TEXT
+            textSize = 11f
+            isFakeBoldText = true
+        }
+        
+        // Nama
+        canvas.drawText("Nama", x + 15f, contentY, labelPaint)
+        canvas.drawText(
+            userInfo?.namaLengkap ?: "__________________",
+            x + LABEL_WIDTH,
+            contentY,
+            valuePaint
+        )
+        contentY += 18f
+        
+        // NIP
+        canvas.drawText("NIP", x + 15f, contentY, labelPaint)
+        canvas.drawText(
+            userInfo?.nip ?: "__________________",
+            x + LABEL_WIDTH,
+            contentY,
+            valuePaint
+        )
+        contentY += 18f
+        
+        // Jabatan - selalu "Petugas pelaksana P2TL"
+        canvas.drawText("Jabatan", x + 15f, contentY, labelPaint)
+        canvas.drawText(
+            "Petugas pelaksana P2TL",
+            x + LABEL_WIDTH,
+            contentY,
+            valuePaint
+        )
+        contentY += 22f
+        
+        // Garis tanda tangan
+        val linePaint = android.graphics.Paint().apply {
+            color = COLOR_BORDER
+            strokeWidth = 1f
+        }
+        val lineLength = 120f
+        val lineX = x + width - 15f - lineLength
+        canvas.drawLine(lineX, contentY, lineX + lineLength, contentY, linePaint)
+        
+        // Teks tanda tangan
+        val signaturePaint = android.graphics.Paint().apply {
+            color = COLOR_TEXT_SECONDARY
+            textSize = 9f
+            textAlign = android.graphics.Paint.Align.CENTER
+        }
+        canvas.drawText(
+            "Tanda Tangan",
+            lineX + lineLength / 2,
+            contentY + 12f,
+            signaturePaint
+        )
+        
+        return y + sectionHeight
+    }
+    
+    private fun drawFooter(canvas: android.graphics.Canvas, riwayat: RiwayatData, startY: Float) {
+        val yPos = PAGE_HEIGHT - 20f
+        
+        val linePaint = android.graphics.Paint().apply {
+            color = COLOR_BORDER
+            strokeWidth = 0.5f
+        }
+        canvas.drawLine(MARGIN, yPos - 15f, PAGE_WIDTH - MARGIN, yPos - 15f, linePaint)
+        
+        val textPaint = android.graphics.Paint().apply {
+            color = COLOR_TEXT_SECONDARY
+            textSize = 8f
+        }
+        
+        // ID Laporan kiri
+        canvas.drawText("ID: ${riwayat.id.take(8).uppercase()}", MARGIN, yPos - 5f, textPaint)
+        
+        // Tanggal cetak tengah
+        val printDate = "Dicetak: ${formatTimestamp(System.currentTimeMillis())}"
+        canvas.drawText(printDate, (PAGE_WIDTH - textPaint.measureText(printDate)) / 2, yPos - 5f, textPaint)
+        
+        // Halaman kanan
+        val pageText = "Halaman 1/1"
+        canvas.drawText(pageText, PAGE_WIDTH - MARGIN - textPaint.measureText(pageText), yPos - 5f, textPaint)
+    }
+    
+    private fun drawWatermark(canvas: android.graphics.Canvas) {
+        val watermarkPaint = android.graphics.Paint().apply {
+            color = colorWithAlpha(COLOR_PRIMARY, 5)
+            textSize = 100f
+            isFakeBoldText = true
+            textAlign = android.graphics.Paint.Align.CENTER
+        }
+        
+        canvas.save()
+        canvas.rotate(-45f, PAGE_WIDTH / 2, PAGE_HEIGHT / 2)
+        
+        val watermark = "PLN"
+        canvas.drawText(
+            watermark,
+            PAGE_WIDTH / 2,
+            PAGE_HEIGHT / 2,
+            watermarkPaint
+        )
+        
+        canvas.restore()
+    }
+    
+    private fun drawCard(
+        canvas: android.graphics.Canvas,
+        x: Float,
+        y: Float,
+        width: Float,
+        height: Float,
+        title: String,
+        color: Int
+    ) {
+        val paint = android.graphics.Paint()
+        
+        // Card background
+        paint.color = android.graphics.Color.WHITE
+        paint.style = android.graphics.Paint.Style.FILL
+        canvas.drawRoundRect(
+            x, y, 
+            x + width, y + height,
+            6f, 6f, paint
+        )
+        
+        // Card border
+        paint.color = COLOR_BORDER
+        paint.style = android.graphics.Paint.Style.STROKE
+        paint.strokeWidth = 0.8f
+        canvas.drawRoundRect(
+            x, y, 
+            x + width, y + height,
+            6f, 6f, paint
+        )
+        
+        // Card header
+        paint.color = color
+        paint.style = android.graphics.Paint.Style.FILL
+        canvas.drawRoundRect(
+            x, y, 
+            x + width, y + CARD_HEADER_HEIGHT,
+            6f, 6f, paint
+        )
+        
+        // Title
+        paint.color = android.graphics.Color.WHITE
+        paint.style = android.graphics.Paint.Style.FILL
+        paint.textSize = 10.5f
+        paint.isFakeBoldText = true
+        paint.textAlign = android.graphics.Paint.Align.CENTER
+        paint.typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT_BOLD, android.graphics.Typeface.BOLD)
+        
+        canvas.drawText(
+            title.uppercase(),
+            x + width / 2,
+            y + 15f,
+            paint
+        )
     }
     
     private fun calculateInSampleSize(options: android.graphics.BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int {
@@ -1337,68 +1641,37 @@ object PdfExporter {
         return inSampleSize
     }
     
-    private fun drawModernCard(
-        canvas: android.graphics.Canvas,
-        x: Float,
-        y: Float,
-        width: Float,
-        height: Float,
-        title: String,
-        color: Int
-    ) {
-        val paint = android.graphics.Paint()
-        
-        // Shadow effect yang lebih lembut
-        paint.color = android.graphics.Color.parseColor("#08000000")
-        canvas.drawRoundRect(x + 2f, y + 2f, x + width + 2f, y + height + 2f, 12f, 12f, paint)
-        
-        // Card background dengan warna solid
-        paint.color = android.graphics.Color.WHITE
-        paint.style = android.graphics.Paint.Style.FILL
-        canvas.drawRoundRect(x, y, x + width, y + height, 12f, 12f, paint)
-        
-        // Border yang lebih halus
-        paint.color = android.graphics.Color.parseColor("#E8E8E8")
-        paint.style = android.graphics.Paint.Style.STROKE
-        paint.strokeWidth = 1.2f
-        canvas.drawRoundRect(x, y, x + width, y + height, 12f, 12f, paint)
-        
-        // Header dengan padding lebih
-        paint.color = color
-        paint.style = android.graphics.Paint.Style.FILL
-        canvas.drawRoundRect(x, y, x + width, y + 30f, 12f, 12f, paint)
-        
-        // Garis pemisah header-content
-        paint.color = android.graphics.Color.parseColor("#D0D0D0")
-        paint.strokeWidth = 0.8f
-        canvas.drawLine(x, y + 30f, x + width, y + 30f, paint)
-        
-        // Title dengan padding yang baik
-        paint.color = android.graphics.Color.WHITE
-        paint.style = android.graphics.Paint.Style.FILL
-        paint.textSize = 12f
-        paint.isFakeBoldText = true
-        val textWidth = paint.measureText(title)
-        canvas.drawText(title, x + (width - textWidth) / 2, y + 21f, paint)
+    private fun colorWithAlpha(color: Int, alpha: Int): Int {
+        return android.graphics.Color.argb(
+            alpha,
+            android.graphics.Color.red(color),
+            android.graphics.Color.green(color),
+            android.graphics.Color.blue(color)
+        )
     }
     
-    private fun drawDottedLine(canvas: android.graphics.Canvas, x: Float, y: Float, width: Float) {
-        val paint = android.graphics.Paint()
-        
-        // Garis input yang lebih rapi
-        paint.color = android.graphics.Color.parseColor("#CCCCCC")
-        paint.strokeWidth = 1f
-        canvas.drawLine(x, y + 10f, x + width, y + 10f, paint)
-        
-        // Titik-titik untuk garis isian
-        paint.color = android.graphics.Color.parseColor("#999999")
-        paint.textSize = 16f
-        var dotX = x + 5f
-        val dotCount = kotlin.math.min(20, (width / 10).toInt())
-        repeat(dotCount) {
-            canvas.drawText(".", dotX, y + 10f, paint)
-            dotX += 10f
+    private fun getModeFullText(mode: Int): String {
+        return when (mode) {
+            1 -> "Mode LED Blink (Arus)"
+            2 -> "Mode Display kW (Arus)"
+            3 -> "Mode LED Blink (Tegangan)"
+            4 -> "Mode Display kW (Tegangan)"
+            else -> "Mode Tidak Diketahui"
         }
+    }
+    
+    private fun getModeShortText(mode: Int): String {
+        return when (mode) {
+            1 -> "LED Blink"
+            2 -> "Display kW"
+            3 -> "LED Blink"
+            4 -> "Display kW"
+            else -> "Unknown"
+        }
+    }
+    
+    private fun formatTimestamp(timestamp: Long): String {
+        return SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date(timestamp))
     }
 }
 
@@ -1520,7 +1793,97 @@ fun RegisterScreen(viewModel: KwhViewModel) {
         Spacer(Modifier.height(24.dp))
         
         // REGISTER FORM
-        RegisterForm(viewModel)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    "Data Diri Pengguna",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF333333)
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Wajib diisi sebelum menggunakan aplikasi",
+                    fontSize = 12.sp,
+                    color = Color(0xFF6C757D)
+                )
+                Spacer(Modifier.height(16.dp))
+                
+                OutlinedTextField(
+                    value = namaLengkap,
+                    onValueChange = { viewModel.setNamaLengkap(it) },
+                    label = { Text("Nama Lengkap *") },
+                    modifier = Modifier.fillMaxWidth(),
+                    leadingIcon = {
+                        Icon(Icons.Default.Person, contentDescription = null)
+                    },
+                    singleLine = true
+                )
+                
+                Spacer(Modifier.height(12.dp))
+                
+                OutlinedTextField(
+                    value = nip,
+                    onValueChange = { viewModel.setNip(it) },
+                    label = { Text("NIP *") },
+                    modifier = Modifier.fillMaxWidth(),
+                    leadingIcon = {
+                        Icon(Icons.Default.Badge, contentDescription = null)
+                    },
+                    singleLine = true
+                )
+                
+                Spacer(Modifier.height(12.dp))
+                
+                OutlinedTextField(
+                    value = namaPerusahaan,
+                    onValueChange = { viewModel.setNamaPerusahaan(it) },
+                    label = { Text("Nama Perusahaan *") },
+                    modifier = Modifier.fillMaxWidth(),
+                    leadingIcon = {
+                        Icon(Icons.Default.Business, contentDescription = null)
+                    },
+                    singleLine = true
+                )
+                
+                Spacer(Modifier.height(12.dp))
+                
+                OutlinedTextField(
+                    value = kedudukanPerusahaan,
+                    onValueChange = { viewModel.setKedudukanPerusahaan(it) },
+                    label = { Text("Kedudukan Perusahaan *") },
+                    modifier = Modifier.fillMaxWidth(),
+                    leadingIcon = {
+                        Icon(Icons.Default.LocationOn, contentDescription = null)
+                    },
+                    placeholder = { Text("Contoh: PLN UID/UP3/ULP") },
+                    singleLine = true
+                )
+                
+                Spacer(Modifier.height(24.dp))
+                
+                Button(
+                    onClick = { viewModel.register() },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFFF9800)
+                    ),
+                    enabled = namaLengkap.isNotEmpty() && nip.isNotEmpty() && 
+                             namaPerusahaan.isNotEmpty() && kedudukanPerusahaan.isNotEmpty()
+                ) {
+                    Text("DAFTAR DAN GUNAKAN APLIKASI", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
         
         Spacer(Modifier.height(24.dp))
         
@@ -1561,106 +1924,6 @@ fun RegisterScreen(viewModel: KwhViewModel) {
                     fontSize = 12.sp,
                     color = Color(0xFF6C757D)
                 )
-            }
-        }
-    }
-}
-
-@Composable
-fun RegisterForm(viewModel: KwhViewModel) {
-    val namaLengkap by viewModel.namaLengkap.collectAsState()
-    val nip by viewModel.nip.collectAsState()
-    val namaPerusahaan by viewModel.namaPerusahaan.collectAsState()
-    val kedudukanPerusahaan by viewModel.kedudukanPerusahaan.collectAsState()
-    
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                "Data Diri Pengguna",
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF333333)
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "Wajib diisi sebelum menggunakan aplikasi",
-                fontSize = 12.sp,
-                color = Color(0xFF6C757D)
-            )
-            Spacer(Modifier.height(16.dp))
-            
-            OutlinedTextField(
-                value = namaLengkap,
-                onValueChange = { viewModel.setNamaLengkap(it) },
-                label = { Text("Nama Lengkap *") },
-                modifier = Modifier.fillMaxWidth(),
-                leadingIcon = {
-                    Icon(Icons.Default.Person, contentDescription = null)
-                },
-                singleLine = true
-            )
-            
-            Spacer(Modifier.height(12.dp))
-            
-            OutlinedTextField(
-                value = nip,
-                onValueChange = { viewModel.setNip(it) },
-                label = { Text("NIP *") },
-                modifier = Modifier.fillMaxWidth(),
-                leadingIcon = {
-                    Icon(Icons.Default.Badge, contentDescription = null)
-                },
-                singleLine = true
-            )
-            
-            Spacer(Modifier.height(12.dp))
-            
-            OutlinedTextField(
-                value = namaPerusahaan,
-                onValueChange = { viewModel.setNamaPerusahaan(it) },
-                label = { Text("Nama Perusahaan *") },
-                modifier = Modifier.fillMaxWidth(),
-                leadingIcon = {
-                    Icon(Icons.Default.Business, contentDescription = null)
-                },
-                singleLine = true
-            )
-            
-            Spacer(Modifier.height(12.dp))
-            
-            OutlinedTextField(
-                value = kedudukanPerusahaan,
-                onValueChange = { viewModel.setKedudukanPerusahaan(it) },
-                label = { Text("Kedudukan Perusahaan *") },
-                modifier = Modifier.fillMaxWidth(),
-                leadingIcon = {
-                    Icon(Icons.Default.LocationOn, contentDescription = null)
-                },
-                placeholder = { Text("Contoh: PLN UID/UP3/ULP") },
-                singleLine = true
-            )
-            
-            Spacer(Modifier.height(24.dp))
-            
-            Button(
-                onClick = { viewModel.register() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFFF9800)
-                ),
-                enabled = namaLengkap.isNotEmpty() && nip.isNotEmpty() && 
-                         namaPerusahaan.isNotEmpty() && kedudukanPerusahaan.isNotEmpty()
-            ) {
-                Text("DAFTAR DAN GUNAKAN APLIKASI", fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -1859,15 +2122,90 @@ fun ProfileDialog(
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        InfoRow(label = "Nama Lengkap", value = userInfo?.namaLengkap ?: "")
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                "Nama Lengkap",
+                                fontSize = 12.sp,
+                                color = Color(0xFF6C757D)
+                            )
+                            Text(
+                                userInfo?.namaLengkap ?: "",
+                                fontSize = 12.sp,
+                                color = Color(0xFF333333),
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                         Spacer(Modifier.height(8.dp))
-                        InfoRow(label = "NIP", value = userInfo?.nip ?: "")
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                "NIP",
+                                fontSize = 12.sp,
+                                color = Color(0xFF6C757D)
+                            )
+                            Text(
+                                userInfo?.nip ?: "",
+                                fontSize = 12.sp,
+                                color = Color(0xFF333333),
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                         Spacer(Modifier.height(8.dp))
-                        InfoRow(label = "Perusahaan", value = userInfo?.namaPerusahaan ?: "")
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                "Perusahaan",
+                                fontSize = 12.sp,
+                                color = Color(0xFF6C757D)
+                            )
+                            Text(
+                                userInfo?.namaPerusahaan ?: "",
+                                fontSize = 12.sp,
+                                color = Color(0xFF333333),
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                         Spacer(Modifier.height(8.dp))
-                        InfoRow(label = "Kedudukan", value = userInfo?.kedudukanPerusahaan ?: "")
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                "Kedudukan",
+                                fontSize = 12.sp,
+                                color = Color(0xFF6C757D)
+                            )
+                            Text(
+                                userInfo?.kedudukanPerusahaan ?: "",
+                                fontSize = 12.sp,
+                                color = Color(0xFF333333),
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                         Spacer(Modifier.height(8.dp))
-                        InfoRow(label = "Terdaftar", value = formatTimestamp(userInfo?.createdAt ?: 0))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                "Terdaftar",
+                                fontSize = 12.sp,
+                                color = Color(0xFF6C757D)
+                            )
+                            Text(
+                                formatTimestamp(userInfo?.createdAt ?: 0),
+                                fontSize = 12.sp,
+                                color = Color(0xFF333333),
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                     }
                 }
                 
@@ -1991,26 +2329,6 @@ fun ProfileDialog(
                     Text("Batal")
                 }
             }
-        )
-    }
-}
-
-@Composable
-fun InfoRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(
-            label,
-            fontSize = 12.sp,
-            color = Color(0xFF6C757D)
-        )
-        Text(
-            value,
-            fontSize = 12.sp,
-            color = Color(0xFF333333),
-            fontWeight = FontWeight.Medium
         )
     }
 }
@@ -2429,8 +2747,8 @@ fun InputDataScreen(viewModel: KwhViewModel, onNavigateToRiwayat: () -> Unit) {
                 phaseR = phaseR,
                 phaseS = phaseS,
                 phaseT = phaseT,
-                blinkRecords = blinkRecords,  // Pastikan ini dikirimkan
-                selectedBlinkIndex = selectedBlinkIndex,  // Pastikan ini dikirimkan
+                blinkRecords = blinkRecords,
+                selectedBlinkIndex = selectedBlinkIndex,
                 results = results,
                 isCalculationValid = isCalculationValid,
                 onClassMeterChange = { viewModel.setClassMeter(it) },
@@ -3474,7 +3792,7 @@ fun RiwayatScreen(viewModel: KwhViewModel, onNavigateToInput: () -> Unit) {
             userInfo = userInfo,
             onSuccess = { uri ->
                 exportInProgress = false
-                val fileName = "Laporan_${if (riwayat.pelangganData.nama.isNotEmpty()) riwayat.pelangganData.nama else "Data"}.html"
+                val fileName = "Laporan_${if (riwayat.pelangganData.nama.isNotEmpty()) riwayat.pelangganData.nama else "Data"}.pdf"
                 PdfExporter.shareFile(context, uri, fileName)
             },
             onError = { error ->
