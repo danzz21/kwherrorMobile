@@ -98,7 +98,7 @@ implementation ("com.google.code.gson:gson:2.10.1")
     // ===== CORE =====
     implementation("androidx.core:core-ktx:1.12.0")
 
-    // ✅ DATASTORE (PERSISTENT, TANPA KAPT)
+    //DATASTORE (PERSISTENT, TANPA KAPT)
     implementation("androidx.datastore:datastore-preferences:1.0.0")
 
     // ===== COROUTINES =====
