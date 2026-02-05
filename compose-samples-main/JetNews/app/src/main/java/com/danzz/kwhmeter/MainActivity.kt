@@ -2,7 +2,6 @@ package com.danzz.kwhmeter
 
 import android.Manifest
 import android.app.Activity
-import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -13,8 +12,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
-import android.provider.MediaStore
 import android.provider.Settings
+import android.webkit.WebView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -22,8 +21,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -45,6 +43,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -60,7 +59,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.io.File
-import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.text.SimpleDateFormat
@@ -824,117 +822,6 @@ fun createImageFile(context: Context): File? {
     }
 }
 
-// ================= PDF UTILS =================
-object PdfUtils {
-    
-    fun openPdfWithIntent(context: Context, pdfFile: File) {
-        try {
-            val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                FileProvider.getUriForFile(
-                    context,
-                    "${context.packageName}.fileprovider",
-                    pdfFile
-                )
-            } else {
-                Uri.fromFile(pdfFile)
-            }
-            
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "application/pdf")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            
-            val chooser = Intent.createChooser(intent, "Buka PDF dengan...")
-            
-            if (intent.resolveActivity(context.packageManager) != null) {
-                context.startActivity(chooser)
-            } else {
-                Toast.makeText(
-                    context, 
-                    "Tidak ada aplikasi PDF reader terinstall", 
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            Toast.makeText(context, "Gagal membuka PDF: ${e.message}", Toast.LENGTH_SHORT).show()
-        }
-    }
-    
-    fun sharePdfFile(context: Context, pdfFile: File) {
-        try {
-            val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                FileProvider.getUriForFile(
-                    context,
-                    "${context.packageName}.fileprovider",
-                    pdfFile
-                )
-            } else {
-                Uri.fromFile(pdfFile)
-            }
-            
-            val shareIntent = Intent().apply {
-                action = Intent.ACTION_SEND
-                type = "application/pdf"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_SUBJECT, "Laporan Pengujian KWH Meter: ${pdfFile.nameWithoutExtension}")
-                putExtra(Intent.EXTRA_TEXT, """
-                    Laporan Pengujian KWH Meter
-                    
-                    © ${SimpleDateFormat("yyyy", Locale.getDefault()).format(Date())} - KWH Meter Test
-                """.trimIndent())
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            
-            val chooser = Intent.createChooser(shareIntent, "Bagikan PDF")
-            context.startActivity(chooser)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            Toast.makeText(context, "Gagal membagikan PDF: ${e.message}", Toast.LENGTH_SHORT).show()
-        }
-    }
-    
-    fun savePdfToDownloads(context: Context, pdfFile: File): Boolean {
-        return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // Android 10+
-                val contentValues = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, pdfFile.name)
-                    put(MediaStore.MediaColumns.MIME_TYPE, "application/pdf")
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                }
-                
-                val resolver = context.contentResolver
-                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
-                
-                uri?.let {
-                    resolver.openOutputStream(it)?.use { outputStream ->
-                        FileInputStream(pdfFile).use { inputStream ->
-                            inputStream.copyTo(outputStream)
-                        }
-                    }
-                }
-                true
-            } else {
-                // Android 9 dan sebelumnya
-                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                val destFile = File(downloadsDir, pdfFile.name)
-                
-                FileInputStream(pdfFile).use { inputStream ->
-                    FileOutputStream(destFile).use { outputStream ->
-                        inputStream.copyTo(outputStream)
-                    }
-                }
-                true
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            false
-        }
-    }
-}
-
 // ================= PDF EXPORTER =================
 object PdfExporter {
     
@@ -962,13 +849,21 @@ object PdfExporter {
         context: Context,
         riwayat: RiwayatData,
         userInfo: UserInfo? = null,
-        onSuccess: (File) -> Unit,
+        onSuccess: (Uri) -> Unit,
         onError: (String) -> Unit
     ) {
         try {
             val pdfFile = createPdfFile(context, riwayat)
-            createPdfDocument(context, riwayat, pdfFile, userInfo)
-            onSuccess(pdfFile)
+            createPdfDocument(context, riwayat, pdfFile, userInfo) // PERUBAHAN DI SINI: panggil fungsi public
+            
+            val uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                pdfFile
+            )
+            
+            onSuccess(uri)
+            
         } catch (e: Exception) {
             e.printStackTrace()
             onError("Gagal membuat PDF: ${e.message}")
@@ -993,7 +888,38 @@ object PdfExporter {
         return directory
     }
     
-    private fun createPdfDocument(context: Context, riwayat: RiwayatData, pdfFile: File, userInfo: UserInfo?) {
+    fun shareFile(context: Context, uri: Uri, fileName: String) {
+        try {
+            val shareIntent = Intent().apply {
+                action = Intent.ACTION_SEND
+                type = "application/pdf"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, "Laporan Pengujian KWH Meter: $fileName")
+                putExtra(Intent.EXTRA_TEXT, """
+                    Laporan Pengujian KWH Meter
+                    
+                    Isi laporan:
+                    ✓ Data Pelanggan
+                    ✓ Parameter Pengujian
+                    ✓ Data Input
+                    ✓ Hasil Pengukuran
+                    ✓ Dokumentasi Foto
+                    ✓ Tanda Tangan Pelaksana
+                    
+                    © ${SimpleDateFormat("yyyy", Locale.getDefault()).format(Date())} - KWH Meter Test
+                """.trimIndent())
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            
+            context.startActivity(Intent.createChooser(shareIntent, "Bagikan Laporan PDF"))
+            
+        } catch (e: Exception) {
+            Toast.makeText(context, "Gagal membagikan PDF: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+    
+    // PERUBAHAN DI SINI: ubah dari private ke public
+    fun createPdfDocument(context: Context, riwayat: RiwayatData, pdfFile: File, userInfo: UserInfo?) {
         val document = PdfDocument()
         
         val pageInfo = PdfDocument.PageInfo.Builder(
@@ -1682,204 +1608,168 @@ object PdfExporter {
             android.graphics.Color.blue(color)
         )
     }
+    
+    // Fungsi untuk generate preview PDF temporary (tanpa PDF viewer)
+    fun generatePreviewPdf(
+        context: Context,
+        riwayat: RiwayatData,
+        userInfo: UserInfo? = null,
+        onSuccess: (Uri) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        try {
+            // Buat file temporary di cache
+            val cacheDir = context.cacheDir
+            val tempDir = File(cacheDir, "pdf_previews")
+            if (!tempDir.exists()) {
+                tempDir.mkdirs()
+            }
+            
+            val tempFile = File(tempDir, "preview_${System.currentTimeMillis()}.pdf")
+            
+            // Buat PDF document
+            createPdfDocument(context, riwayat, tempFile, userInfo)
+            
+            // Konversi ke URI
+            val uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                tempFile
+            )
+            
+            onSuccess(uri)
+            
+        } catch (e: Exception) {
+            e.printStackTrace()
+            onError("Gagal membuat preview PDF: ${e.message}")
+        }
+    }
 }
 
-// ================= PDF DIALOG =================
+// ================= WEBVIEW PDF ACTIVITY =================
+class PdfWebViewActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        
+        val pdfUri = intent.getStringExtra("pdf_uri")
+        val fileName = intent.getStringExtra("file_name") ?: "Preview.pdf"
+        
+        setContent {
+            WebViewScreen(
+                pdfUri = pdfUri,
+                fileName = fileName,
+                onBack = { finish() }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PdfOptionsDialog(
-    riwayat: RiwayatData?,
-    userInfo: UserInfo?,
-    context: Context,
-    onOpenPdf: () -> Unit,
-    onSharePdf: () -> Unit,
-    onDownloadPdf: () -> Unit,
-    onDismiss: () -> Unit
+fun WebViewScreen(
+    pdfUri: String?,
+    fileName: String,
+    onBack: () -> Unit
 ) {
-    if (riwayat != null) {
-        Dialog(
-            onDismissRequest = onDismiss
-        ) {
-            Card(
+    val context = LocalContext.current
+    var isLoading by remember { mutableStateOf(true) }
+    
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        "Preview: $fileName",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowBack,
+                            contentDescription = "Kembali"
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color(0xFF0D6EFD),
+                    titleContentColor = Color.White,
+                    navigationIconContentColor = Color.White
+                )
+            )
+        },
+        bottomBar = {
+            Row(
                 modifier = Modifier
-                    .fillMaxWidth(0.95f)
-                    .heightIn(min = 400.dp, max = 500.dp),
-                shape = RoundedCornerShape(16.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Column(
-                    modifier = Modifier.fillMaxSize()
+                Button(
+                    onClick = onBack,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF6C757D)
+                    )
                 ) {
-                    // Header Dialog
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp)
-                            .background(Color(0xFF0D6EFD)),
-                        contentAlignment = Alignment.CenterStart
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                "Opsi PDF",
-                                color = Color.White,
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            
-                            IconButton(
-                                onClick = onDismiss,
-                                modifier = Modifier.size(36.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.Close,
-                                    contentDescription = "Tutup",
-                                    tint = Color.White
-                                )
+                    Text("Tutup Preview")
+                }
+            }
+        }
+    ) { paddingValues ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+        ) {
+            AndroidView(
+                factory = { ctx ->
+                    WebView(ctx).apply {
+                        settings.javaScriptEnabled = true
+                        settings.loadWithOverviewMode = true
+                        settings.useWideViewPort = true
+                        settings.builtInZoomControls = true
+                        settings.displayZoomControls = false
+                        
+                        webViewClient = object : android.webkit.WebViewClient() {
+                            override fun onPageFinished(view: WebView?, url: String?) {
+                                super.onPageFinished(view, url)
+                                isLoading = false
                             }
                         }
                     }
-                    
-                    // Content
+                },
+                update = { webView ->
+                    pdfUri?.let { uriString ->
+                        val uri = android.net.Uri.parse(uriString)
+                        val file = File(uri.path ?: "")
+                        
+                        // Tampilkan PDF di WebView
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            // Untuk Android 10+ gunakan Google Docs Viewer
+                            webView.loadUrl("https://docs.google.com/gview?embedded=true&url=$uriString")
+                        } else {
+                            // Untuk versi lama, langsung load file
+                            webView.loadUrl("file://${file.absolutePath}")
+                        }
+                    }
+                }
+            )
+            
+            if (isLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.White),
+                    contentAlignment = Alignment.Center
+                ) {
                     Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        // Info Card
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = Color(0xFFF8F9FA)
-                            )
-                        ) {
-                            Box(
-                                modifier = Modifier.fillMaxSize(),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                                    modifier = Modifier.padding(16.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.PictureAsPdf,
-                                        contentDescription = "PDF",
-                                        modifier = Modifier.size(64.dp),
-                                        tint = Color(0xFFDC3545)
-                                    )
-                                    
-                                    Column(
-                                        horizontalAlignment = Alignment.CenterHorizontally
-                                    ) {
-                                        Text(
-                                            "Laporan Pengujian",
-                                            fontSize = 18.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color(0xFF333333)
-                                        )
-                                        Text(
-                                            if (riwayat.pelangganData.nama.isNotEmpty()) 
-                                                "Nama: ${riwayat.pelangganData.nama}" 
-                                            else "Data Umum",
-                                            fontSize = 14.sp,
-                                            color = Color(0xFF6C757D)
-                                        )
-                                        Text(
-                                            "Mode ${riwayat.mode} • ${formatTimestamp(riwayat.timestamp)}",
-                                            fontSize = 12.sp,
-                                            color = Color(0xFF6C757D)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // Action Buttons
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            // Button Buka PDF
-                            Button(
-                                onClick = onOpenPdf,
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFF0D6EFD)
-                                )
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.Center
-                                ) {
-                                    Icon(
-                                        Icons.Default.Visibility,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(Modifier.width(12.dp))
-                                    Text("Buka PDF")
-                                }
-                            }
-                            
-                            // Button Bagikan PDF
-                            Button(
-                                onClick = onSharePdf,
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFF198754)
-                                )
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.Center
-                                ) {
-                                    Icon(
-                                        Icons.Default.Share,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(Modifier.width(12.dp))
-                                    Text("Bagikan PDF")
-                                }
-                            }
-                            
-                            // Button Download PDF
-                            Button(
-                                onClick = onDownloadPdf,
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFF6C757D)
-                                )
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.Center
-                                ) {
-                                    Icon(
-                                        Icons.Default.Download,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(Modifier.width(12.dp))
-                                    Text("Download ke Handphone")
-                                }
-                            }
-                        }
-                        
-                        // Info
-                        Text(
-                            "PDF akan dibuat dan dibuka dengan aplikasi PDF reader yang terinstall di perangkat Anda",
-                            fontSize = 11.sp,
-                            color = Color(0xFF6C757D),
-                            textAlign = TextAlign.Center
-                        )
+                        CircularProgressIndicator(color = Color(0xFF0D6EFD))
+                        Text("Memuat PDF Preview...")
                     }
                 }
             }
@@ -1893,6 +1783,773 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             KwhMeterApp()
+        }
+    }
+}
+
+// ================= KOMPONEN BANTUAN =================
+@Composable
+fun InfoItem(
+    label: String,
+    value: String,
+    icon: ImageVector,
+    valueColor: Color = Color(0xFF333333)
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Icon(
+            icon,
+            contentDescription = label,
+            tint = Color(0xFF6C757D),
+            modifier = Modifier.size(16.dp)
+        )
+        Column {
+            Text(
+                label,
+                fontSize = 10.sp,
+                color = Color(0xFF6C757D)
+            )
+            Text(
+                value,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = valueColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+// ================= SIMPLE PDF PREVIEW DIALOG (REVISI) =================
+@Composable
+fun SimplePdfPreviewDialog(
+    riwayat: RiwayatData?,
+    userInfo: UserInfo?,
+    context: Context,
+    onDismiss: () -> Unit
+) {
+    var isLoading by remember { mutableStateOf(false) }
+    var generatedPdfUri by remember { mutableStateOf<Uri?>(null) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var downloadSuccess by remember { mutableStateOf(false) }
+    var showErrorDialog by remember { mutableStateOf(false) }
+    
+    // Generate PDF ketika dialog dibuka
+    LaunchedEffect(riwayat) {
+        if (riwayat != null && generatedPdfUri == null) {
+            isLoading = true
+            errorMessage = null
+            
+            try {
+                // Generate preview PDF
+                PdfExporter.generatePreviewPdf(
+                    context = context,
+                    riwayat = riwayat,
+                    userInfo = userInfo,
+                    onSuccess = { uri ->
+                        generatedPdfUri = uri
+                        isLoading = false
+                    },
+                    onError = { error ->
+                        isLoading = false
+                        errorMessage = error
+                        showErrorDialog = true
+                    }
+                )
+            } catch (e: Exception) {
+                isLoading = false
+                errorMessage = "Error: ${e.message}"
+                e.printStackTrace()
+                showErrorDialog = true
+            }
+        }
+    }
+    
+    // Error Dialog
+    if (showErrorDialog) {
+        AlertDialog(
+            onDismissRequest = { showErrorDialog = false },
+            title = { Text("Error") },
+            text = { 
+                Text(errorMessage ?: "Terjadi kesalahan saat membuat preview PDF")
+            },
+            confirmButton = {
+                Button(
+                    onClick = { 
+                        showErrorDialog = false
+                        onDismiss()
+                    }
+                ) {
+                    Text("OK")
+                }
+            }
+        )
+    }
+    
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth(0.95f)
+                .fillMaxHeight(0.85f),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // HEADER
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.PictureAsPdf,
+                        contentDescription = "PDF",
+                        modifier = Modifier.size(32.dp),
+                        tint = Color(0xFFF44336)
+                    )
+                    
+                    Text(
+                        "PREVIEW LAPORAN",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF333333)
+                    )
+                    
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Tutup",
+                            tint = Color(0xFF6C757D)
+                        )
+                    }
+                }
+                
+                Spacer(Modifier.height(16.dp))
+                
+                if (errorMessage != null) {
+                    // ERROR MESSAGE CARD
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Error,
+                                contentDescription = "Error",
+                                tint = Color(0xFFD32F2F),
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "Terjadi Kesalahan",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFD32F2F)
+                                )
+                                Text(
+                                    errorMessage ?: "Unknown error",
+                                    fontSize = 12.sp,
+                                    color = Color(0xFFD32F2F)
+                                )
+                            }
+                        }
+                    }
+                }
+                
+                if (isLoading) {
+                    // LOADING STATE
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(60.dp),
+                                color = Color(0xFF0D6EFD),
+                                strokeWidth = 4.dp
+                            )
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    "Menyiapkan Preview PDF",
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF333333)
+                                )
+                                Text(
+                                    "Mohon tunggu sebentar...",
+                                    fontSize = 14.sp,
+                                    color = Color(0xFF6C757D)
+                                )
+                            }
+                        }
+                    }
+                } else if (riwayat != null && generatedPdfUri != null) {
+                    // Tampilkan hanya jika ada riwayat dan PDF sudah dibuat
+                    // DETAIL LAPORAN DALAM BOX/CARD
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        // CARD 1: INFO UMUM
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFFE3F2FD)),
+                            shape = RoundedCornerShape(16.dp),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "📋 INFO UMUM",
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF0D47A1)
+                                    )
+                                    Badge(
+                                        containerColor = Color(0xFFFF9800),
+                                        contentColor = Color.White
+                                    ) {
+                                        Text("MODE ${riwayat.mode}")
+                                    }
+                                }
+                                
+                                Spacer(Modifier.height(12.dp))
+                                
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                                ) {
+                                    Column(
+                                        modifier = Modifier.weight(1f),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        InfoItem(
+                                            label = "Pelanggan",
+                                            value = riwayat.pelangganData.nama.ifEmpty { "Tidak tercantum" },
+                                            icon = Icons.Default.Person
+                                        )
+                                        InfoItem(
+                                            label = "ID",
+                                            value = riwayat.pelangganData.idPelanggan.ifEmpty { "-" },
+                                            icon = Icons.Default.Numbers
+                                        )
+                                        InfoItem(
+                                            label = "Tanggal",
+                                            value = formatTimestamp(riwayat.timestamp),
+                                            icon = Icons.Default.DateRange
+                                        )
+                                    }
+                                    
+                                    Column(
+                                        modifier = Modifier.weight(1f),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        InfoItem(
+                                            label = "Mode",
+                                            value = when (riwayat.mode) {
+                                                1 -> "Impulse vs V×I×Cosφ"
+                                                2 -> "Display vs Tang kW"
+                                                3 -> "Impulse vs Tang kW"
+                                                4 -> "Display vs V×I×Cosφ"
+                                                else -> "Tidak diketahui"
+                                            },
+                                            icon = Icons.Default.Settings
+                                        )
+                                        InfoItem(
+                                            label = "Foto",
+                                            value = "${riwayat.pelangganData.fotoPaths.size} dokumen",
+                                            icon = Icons.Default.Photo
+                                        )
+                                        InfoItem(
+                                            label = "Status",
+                                            value = if (riwayat.calculationResult.status == "DI DALAM KELAS METER") "Valid" else "Perlu Perhatian",
+                                            icon = if (riwayat.calculationResult.status == "DI DALAM KELAS METER") Icons.Default.CheckCircle else Icons.Default.Warning,
+                                            valueColor = if (riwayat.calculationResult.status == "DI DALAM KELAS METER") Color(0xFF2E7D32) else Color(0xFFD32F2F)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // CARD 2: HASIL PERHITUNGAN
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9)),
+                            shape = RoundedCornerShape(16.dp),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "📊 HASIL PERHITUNGAN",
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF1B5E20)
+                                    )
+                                    Icon(
+                                        Icons.Default.Calculate,
+                                        contentDescription = "Perhitungan",
+                                        tint = Color(0xFF1B5E20)
+                                    )
+                                }
+                                
+                                Spacer(Modifier.height(16.dp))
+                                
+                                // ROW 1: P1 dan P2
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                                ) {
+                                    // P1 CARD
+                                    Card(
+                                        modifier = Modifier.weight(1f),
+                                        colors = CardDefaults.cardColors(containerColor = Color(0xFFE3F2FD)),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(12.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            Text(
+                                                "P1",
+                                                fontSize = 12.sp,
+                                                color = Color(0xFF0D47A1)
+                                            )
+                                            Text(
+                                                "${String.format("%.3f", riwayat.calculationResult.p1)} kW",
+                                                fontSize = 18.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF0D47A1)
+                                            )
+                                            Text(
+                                                "(${riwayat.calculationResult.p1Source})",
+                                                fontSize = 10.sp,
+                                                color = Color(0xFF0D47A1).copy(alpha = 0.7f)
+                                            )
+                                        }
+                                    }
+                                    
+                                    // P2 CARD
+                                    Card(
+                                        modifier = Modifier.weight(1f),
+                                        colors = CardDefaults.cardColors(containerColor = Color(0xFFF1F8E9)),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(12.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            Text(
+                                                "P2",
+                                                fontSize = 12.sp,
+                                                color = Color(0xFF33691E)
+                                            )
+                                            Text(
+                                                "${String.format("%.3f", riwayat.calculationResult.p2)} kW",
+                                                fontSize = 18.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF33691E)
+                                            )
+                                            Text(
+                                                "(${riwayat.calculationResult.p2Source})",
+                                                fontSize = 10.sp,
+                                                color = Color(0xFF33691E).copy(alpha = 0.7f)
+                                            )
+                                        }
+                                    }
+                                }
+                                
+                                Spacer(Modifier.height(16.dp))
+                                
+                                // ROW 2: ERROR dan STATUS
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                                ) {
+                                    // ERROR CARD
+                                    Card(
+                                        modifier = Modifier.weight(1f),
+                                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1)),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(12.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            Text(
+                                                "ERROR",
+                                                fontSize = 12.sp,
+                                                color = Color(0xFFF57C00)
+                                            )
+                                            Text(
+                                                "${String.format("%.2f", riwayat.calculationResult.error)}%",
+                                                fontSize = 18.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFFF57C00)
+                                            )
+                                            Text(
+                                                "Kelas: ${riwayat.calculationResult.kelasMeter}%",
+                                                fontSize = 10.sp,
+                                                color = Color(0xFFF57C00).copy(alpha = 0.7f)
+                                            )
+                                        }
+                                    }
+                                    
+                                    // STATUS CARD
+                                    Card(
+                                        modifier = Modifier.weight(1f),
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = if (riwayat.calculationResult.status == "DI DALAM KELAS METER") 
+                                                Color(0xFFE8F5E9) 
+                                            else 
+                                                Color(0xFFFFEBEE)
+                                        ),
+                                        shape = RoundedCornerShape(12.dp),
+                                        border = BorderStroke(
+                                            2.dp,
+                                            if (riwayat.calculationResult.status == "DI DALAM KELAS METER") 
+                                                Color(0xFF4CAF50) 
+                                            else 
+                                                Color(0xFFF44336)
+                                        )
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(12.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            Text(
+                                                "STATUS",
+                                                fontSize = 12.sp,
+                                                color = if (riwayat.calculationResult.status == "DI DALAM KELAS METER") 
+                                                    Color(0xFF2E7D32) 
+                                                else 
+                                                    Color(0xFFD32F2F)
+                                            )
+                                            Text(
+                                                riwayat.calculationResult.status,
+                                                fontSize = 14.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (riwayat.calculationResult.status == "DI DALAM KELAS METER") 
+                                                    Color(0xFF2E7D32) 
+                                                else 
+                                                    Color(0xFFD32F2F),
+                                                textAlign = TextAlign.Center
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // TOMBOL AKSI
+                        Spacer(Modifier.height(24.dp))
+                        
+                        // TOMBOL AKSI - 3 BUTTON BERJARAK
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            // BUTTON 1: SHARE PDF
+                            Button(
+                                onClick = {
+                                    riwayat?.let { data ->
+                                        isLoading = true
+                                        errorMessage = null
+                                        PdfExporter.exportRiwayatToPdf(
+                                            context = context,
+                                            riwayat = data,
+                                            userInfo = userInfo,
+                                            onSuccess = { uri ->
+                                                isLoading = false
+                                                val fileName = "Laporan_${if (data.pelangganData.nama.isNotEmpty()) data.pelangganData.nama else "Data"}.pdf"
+                                                PdfExporter.shareFile(context, uri, fileName)
+                                            },
+                                            onError = { error ->
+                                                isLoading = false
+                                                errorMessage = error
+                                                Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
+                                            }
+                                        )
+                                    }
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(56.dp),
+                                enabled = !isLoading && riwayat != null,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFF2196F3)
+                                ),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        Icons.Default.Share,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Spacer(Modifier.width(12.dp))
+                                    Text(
+                                        "SHARE PDF",
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                            
+                            // BUTTON 2: DOWNLOAD PDF (LANGSUNG KE HP)
+                            Button(
+                                onClick = {
+                                    riwayat?.let { data ->
+                                        isLoading = true
+                                        errorMessage = null
+                                        val timestamp = System.currentTimeMillis()
+                                        val fileName = "Laporan_KWH_${if (data.pelangganData.nama.isNotEmpty()) data.pelangganData.nama else "Data"}_${timestamp}.pdf"
+                                        
+                                        // Buat file di Downloads directory
+                                        val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                                        val pdfFile = File(downloadsDir, fileName)
+                                        
+                                        try {
+                                            // Buat PDF document
+                                            PdfExporter.createPdfDocument(context, data, pdfFile, userInfo)
+                                            
+                                            // Notify media scanner
+                                            val mediaScanIntent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
+                                            val contentUri = Uri.fromFile(pdfFile)
+                                            mediaScanIntent.data = contentUri
+                                            context.sendBroadcast(mediaScanIntent)
+                                            
+                                            isLoading = false
+                                            downloadSuccess = true
+                                            
+                                            Toast.makeText(
+                                                context, 
+                                                "PDF berhasil didownload ke folder Downloads", 
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                            
+                                        } catch (e: Exception) {
+                                            isLoading = false
+                                            errorMessage = "Gagal download: ${e.message}"
+                                            Toast.makeText(context, "Gagal download PDF", Toast.LENGTH_SHORT).show()
+                                            e.printStackTrace()
+                                        }
+                                    }
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(56.dp),
+                                enabled = !isLoading && riwayat != null,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFF4CAF50)
+                                ),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        Icons.Default.Download,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Spacer(Modifier.width(12.dp))
+                                    Text(
+                                        "DOWNLOAD",
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                            
+                            // BUTTON 3: BUKA DI PDF VIEWER
+                            Button(
+                                onClick = {
+                                    generatedPdfUri?.let { uri ->
+                                        try {
+                                            val intent = Intent(Intent.ACTION_VIEW).apply {
+                                                setDataAndType(uri, "application/pdf")
+                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                                addFlags(Intent.FLAG_ACTIVITY_NO_HISTORY)
+                                            }
+                                            context.startActivity(intent)
+                                        } catch (e: Exception) {
+                                            // Jika tidak ada PDF viewer, buka dengan WebView
+                                            try {
+                                                val intent = Intent(context, PdfWebViewActivity::class.java).apply {
+                                                    putExtra("pdf_uri", uri.toString())
+                                                    putExtra("file_name", "Preview_${riwayat?.pelangganData?.nama ?: "Data"}.pdf")
+                                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                                }
+                                                context.startActivity(intent)
+                                            } catch (e2: Exception) {
+                                                Toast.makeText(context, "Tidak ada aplikasi untuk membuka PDF", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    } ?: run {
+                                        Toast.makeText(context, "PDF belum siap", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(56.dp),
+                                enabled = generatedPdfUri != null && !isLoading,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFF9C27B0)
+                                ),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        Icons.Default.OpenInBrowser,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Spacer(Modifier.width(12.dp))
+                                    Text(
+                                        "BUKA DI PDF VIEWER",
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                            
+                            // BUTTON Batal
+                            TextButton(
+                                onClick = onDismiss,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text(
+                                    "TUTUP PREVIEW",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = Color(0xFF6C757D)
+                                )
+                            }
+                        }
+                        
+                        // INFORMASI
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F9FA)),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.Info,
+                                        contentDescription = "Info",
+                                        tint = Color(0xFF6C757D),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        "Informasi",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF6C757D)
+                                    )
+                                }
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "• Share: Bagikan PDF ke aplikasi lain\n" +
+                                    "• Download: Simpan langsung ke folder Downloads\n" +
+                                    "• Buka: Lihat PDF di viewer favorit Anda",
+                                    fontSize = 10.sp,
+                                    color = Color(0xFF6C757D),
+                                    lineHeight = 14.sp
+                                )
+                            }
+                        }
+                    }
+                } else if (riwayat != null && generatedPdfUri == null && !isLoading) {
+                    // PDF belum dibuat tapi tidak ada error
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.ErrorOutline,
+                                contentDescription = "Error",
+                                tint = Color(0xFFF44336),
+                                modifier = Modifier.size(60.dp)
+                            )
+                            Text(
+                                "Gagal membuat preview PDF",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF333333)
+                            )
+                            Text(
+                                "Coba buka kembali preview atau share langsung PDF",
+                                fontSize = 14.sp,
+                                color = Color(0xFF6C757D),
+                                textAlign = TextAlign.Center
+                            )
+                            Button(
+                                onClick = onDismiss,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFF2196F3)
+                                )
+                            ) {
+                                Text("Tutup")
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -2147,8 +2804,8 @@ fun RegisterScreen(viewModel: KwhViewModel) {
 fun MainScreen(viewModel: KwhViewModel, userInfo: UserInfo?) {
     var currentTab by remember { mutableStateOf(0) }
     var showProfile by remember { mutableStateOf(false) }
-    var showPdfDialog by remember { mutableStateOf(false) }
-    var selectedRiwayatForPdf by remember { mutableStateOf<RiwayatData?>(null) }
+    var showPdfPreview by remember { mutableStateOf(false) }
+    var selectedRiwayatForExport by remember { mutableStateOf<RiwayatData?>(null) }
     
     val context = LocalContext.current
     
@@ -2241,9 +2898,9 @@ fun MainScreen(viewModel: KwhViewModel, userInfo: UserInfo?) {
                 1 -> RiwayatScreen(
                     viewModel = viewModel, 
                     onNavigateToInput = { currentTab = 0 },
-                    onShowPdfOptions = { riwayat ->
-                        selectedRiwayatForPdf = riwayat
-                        showPdfDialog = true
+                    onShowPdfPreview = { riwayat ->
+                        selectedRiwayatForExport = riwayat
+                        showPdfPreview = true
                     }
                 )
             }
@@ -2257,62 +2914,16 @@ fun MainScreen(viewModel: KwhViewModel, userInfo: UserInfo?) {
             )
         }
         
-        if (showPdfDialog) {
-            selectedRiwayatForPdf?.let { riwayat ->
-                PdfOptionsDialog(
-                    riwayat = riwayat,
-                    userInfo = userInfo,
-                    context = context,
-                    onOpenPdf = {
-                        PdfExporter.exportRiwayatToPdf(
-                            context = context,
-                            riwayat = riwayat,
-                            userInfo = userInfo,
-                            onSuccess = { pdfFile ->
-                                PdfUtils.openPdfWithIntent(context, pdfFile)
-                            },
-                            onError = { error ->
-                                Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
-                            }
-                        )
-                    },
-                    onSharePdf = {
-                        PdfExporter.exportRiwayatToPdf(
-                            context = context,
-                            riwayat = riwayat,
-                            userInfo = userInfo,
-                            onSuccess = { pdfFile ->
-                                PdfUtils.sharePdfFile(context, pdfFile)
-                            },
-                            onError = { error ->
-                                Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
-                            }
-                        )
-                    },
-                    onDownloadPdf = {
-                        PdfExporter.exportRiwayatToPdf(
-                            context = context,
-                            riwayat = riwayat,
-                            userInfo = userInfo,
-                            onSuccess = { pdfFile ->
-                                val success = PdfUtils.savePdfToDownloads(context, pdfFile)
-                                if (success) {
-                                    Toast.makeText(context, "PDF berhasil disimpan ke Downloads", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    Toast.makeText(context, "Gagal menyimpan PDF", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            onError = { error ->
-                                Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
-                            }
-                        )
-                    },
-                    onDismiss = {
-                        showPdfDialog = false
-                        selectedRiwayatForPdf = null
-                    }
-                )
-            }
+        if (showPdfPreview) {
+            SimplePdfPreviewDialog(
+                riwayat = selectedRiwayatForExport,
+                userInfo = userInfo,
+                context = context,
+                onDismiss = {
+                    showPdfPreview = false
+                    selectedRiwayatForExport = null
+                }
+            )
         }
     }
 }
@@ -4118,7 +4729,7 @@ fun BlinkRecordItem(
 fun RiwayatScreen(
     viewModel: KwhViewModel, 
     onNavigateToInput: () -> Unit,
-    onShowPdfOptions: (RiwayatData) -> Unit
+    onShowPdfPreview: (RiwayatData) -> Unit
 ) {
     val riwayatList by viewModel.riwayatList.collectAsState()
     var showDeleteAllDialog by remember { mutableStateOf(false) }
@@ -4265,7 +4876,7 @@ fun RiwayatScreen(
                             onNavigateToInput()
                         },
                         onDelete = { viewModel.deleteRiwayat(riwayat.id) },
-                        onPdf = { onShowPdfOptions(riwayat) }
+                        onPreview = { onShowPdfPreview(riwayat) }
                     )
                 }
             }
@@ -4302,7 +4913,7 @@ fun RiwayatItem(
     riwayat: RiwayatData,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
-    onPdf: () -> Unit
+    onPreview: () -> Unit
 ) {
     var showDeleteDialog by remember { mutableStateOf(false) }
     
@@ -4387,9 +4998,9 @@ fun RiwayatItem(
                 }
                 
                 Row {
-                    // PDF Button
+                    // Preview PDF Button
                     IconButton(
-                        onClick = onPdf,
+                        onClick = onPreview,
                         modifier = Modifier.size(36.dp)
                     ) {
                         Column(
@@ -4397,14 +5008,14 @@ fun RiwayatItem(
                             verticalArrangement = Arrangement.Center
                         ) {
                             Icon(
-                                Icons.Default.PictureAsPdf,
-                                contentDescription = "PDF Options",
-                                tint = Color(0xFFDC3545)
+                                Icons.Default.Visibility,
+                                contentDescription = "Preview PDF",
+                                tint = Color(0xFF9C27B0)
                             )
                             Text(
-                                "PDF",
+                                "Preview",
                                 fontSize = 8.sp,
-                                color = Color(0xFFDC3545),
+                                color = Color(0xFF9C27B0),
                                 textAlign = TextAlign.Center
                             )
                         }
@@ -4537,7 +5148,7 @@ fun RiwayatItem(
             Spacer(Modifier.height(8.dp))
             
             Text(
-                "📄 Klik tombol PDF untuk buka/bagikan/unduh laporan",
+                "📄 Klik Preview untuk generate laporan PDF",
                 fontSize = 10.sp,
                 color = Color(0xFF6C757D)
             )
